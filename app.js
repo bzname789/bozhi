@@ -1155,7 +1155,7 @@ const App = {
                 return `<tr>
                   <td><strong>${t.name}</strong>${t.isAdmin?'<span class="tag tag-orange">管理岗</span>':''}</td>
                   <td>${t.dept||'-'}</td>
-                  <td>${(t.jobType||'full')==='full'?'<span class="tag tag-green">全职</span>':'<span class="tag tag-gray">兼职</span>'}</td>
+                  <td>${(t.jobType||'full')==='full'?'<span class="tag tag-green">全职</span>':(t.jobType==='hourly'?'<span class="tag tag-cyan">时薪</span>':'<span class="tag tag-gray">兼职</span>')}</td>
                   <td>${t.level||'-'}</td>
                   <td>${t.subject||'-'}</td>
                   <td>${t.shareRate||DB.get().settings.defaultShareRate}%</td>
@@ -1220,6 +1220,7 @@ const App = {
             <div class="radio-group" id="tf_jobtype">
               <div class="radio-item ${(data.jobType||'full')==='full'?'checked':''}" data-key="full">全职（享全勤奖）</div>
               <div class="radio-item ${data.jobType==='part'?'checked':''}" data-key="part">兼职（无全勤奖）</div>
+              <div class="radio-item ${data.jobType==='hourly'?'checked':''}" data-key="hourly">时薪制（按工时算）</div>
             </div>
           </div>
           <div class="form-group">
@@ -1229,12 +1230,22 @@ const App = {
         </div>
         <div class="form-row">
           <div class="form-group">
-            <label class="form-label">基本工资 (元)<span class="hint">自定义</span></label>
+            <label class="form-label" id="tf_base_label">基本工资 (元)<span class="hint">自定义</span></label>
             <input class="form-input" type="number" id="tf_base" value="${data.baseSalary||0}">
           </div>
           <div class="form-group">
-            <label class="form-label">绩效基数 (元)<span class="hint">自定义</span></label>
+            <label class="form-label" id="tf_perfbase_label">绩效基数 (元)<span class="hint">自定义</span></label>
             <input class="form-input" type="number" id="tf_perfbase" value="${data.perfBase||0}">
+          </div>
+        </div>
+        <div class="form-row" id="tf_hourly_row" style="display:${data.jobType==='hourly'?'':'none'}">
+          <div class="form-group">
+            <label class="form-label">时薪 (元/小时)<span class="hint">时薪制专用</span></label>
+            <input class="form-input" type="number" id="tf_hourly_rate" value="${data.hourlyRate||0}" placeholder="如 50">
+          </div>
+          <div class="form-group">
+            <label class="form-label">每日标准工时<span class="hint">小时</span></label>
+            <input class="form-input" type="number" id="tf_daily_hours" value="${data.dailyHours||8}" placeholder="如 8">
           </div>
         </div>
           <div class="form-group">
@@ -1281,8 +1292,24 @@ const App = {
       el.onclick = () => {
         $$('#tf_jobtype .radio-item').forEach(x=>x.classList.remove('checked'));
         el.classList.add('checked');
+        App.onJobTypeChange();
       };
     });
+  },
+
+  onJobTypeChange() {
+    const jobType = $$('#tf_jobtype .radio-item.checked')[0]?.dataset.key || 'full';
+    const hourlyRow = $('#tf_hourly_row');
+    const baseLabel = $('#tf_base_label');
+    const perfBaseLabel = $('#tf_perfbase_label');
+    if (hourlyRow) hourlyRow.style.display = jobType === 'hourly' ? '' : 'none';
+    if (jobType === 'hourly') {
+      if (baseLabel) baseLabel.innerHTML = '基本工资<span class="hint">时薪制此项无效</span>';
+      if (perfBaseLabel) perfBaseLabel.innerHTML = '绩效基数<span class="hint">时薪制此项无效</span>';
+    } else {
+      if (baseLabel) baseLabel.innerHTML = '基本工资 (元)<span class="hint">自定义</span>';
+      if (perfBaseLabel) perfBaseLabel.innerHTML = '绩效基数 (元)<span class="hint">自定义</span>';
+    }
   },
 
   saveTeacher() {
@@ -1297,6 +1324,8 @@ const App = {
       jobType: $$('#tf_jobtype .radio-item.checked')[0]?.dataset.key || 'full',
       baseSalary: Number($('#tf_base').value)||0,
       perfBase: Number($('#tf_perfbase').value)||0,
+      hourlyRate: Number($('#tf_hourly_rate')?.value)||0,
+      dailyHours: Number($('#tf_daily_hours')?.value)||8,
       shareRate: Number($('#tf_share').value)||0,
       socialType: $('#tf_social_type').value,
       socialInsurance: Number($('#tf_social').value)||0,
@@ -1368,7 +1397,11 @@ const App = {
           <div class="info-item"><span class="info-label">小课分成</span><span class="info-value">${t.shareRate||DB.get().settings.defaultShareRate}%</span></div>
           <div class="info-item"><span class="info-label">社保</span><span class="info-value">${t.socialType==='pay'?`缴纳 (扣${fmtMoney(t.socialInsurance)})`:t.socialType==='none'?`不缴纳 ${t.socialInsurance>0?'(补贴'+fmtMoney(t.socialInsurance)+')':'(无补贴)'}`:'未设置'}</span></div>
           <div class="info-item"><span class="info-label">岗位</span><span class="info-value">${t.isAdmin?'管理岗':'普通教师'}</span></div>
-          <div class="info-item"><span class="info-label">教师类型</span><span class="info-value">${(t.jobType||'full')==='full'?'全职':'兼职'} ${(t.jobType||'full')==='part'?'<span class=\"tag tag-gray\">无全勤奖</span>':'<span class=\"tag tag-green\">享全勤奖</span>'}</span></div>
+          <div class="info-item"><span class="info-label">教师类型</span><span class="info-value">${(t.jobType||'full')==='full'?'全职':(t.jobType==='hourly'?'时薪制':'兼职')} ${(t.jobType||'full')==='part'?'<span class="tag tag-gray">无全勤奖</span>':(t.jobType==='hourly'?'<span class="tag tag-cyan">按时薪算</span>':'<span class="tag tag-green">享全勤奖</span>')}</span></div>
+          ${t.jobType==='hourly' ? `
+            <div class="info-item"><span class="info-label">时薪</span><span class="info-value">${fmtMoney(t.hourlyRate)} / 小时</span></div>
+            <div class="info-item"><span class="info-label">每日工时</span><span class="info-value">${t.dailyHours||8} 小时</span></div>
+          ` : ''}
           <div class="info-item"><span class="info-label">备注</span><span class="info-value">${t.notes||'-'}</span></div>
         </div>
       `;
@@ -1453,9 +1486,10 @@ const App = {
 
   renderTeacherSalaryDetail(t, sal) {
     const isFullTime = (t.jobType || 'full') === 'full';
+    const isHourly = t.jobType === 'hourly';
     return `
       <div class="highlight-box">
-        当前结算月份: ${this.state.currentMonth} | 修改月份请到「工资结算」页面
+        当前结算月份: ${this.state.currentMonth} | ${isHourly?'⏱️ 时薪制':(isFullTime?'全职':'兼职')} | 修改月份请到「工资结算」页面
       </div>
 
       <div class="salary-section">
@@ -1463,22 +1497,24 @@ const App = {
         <div class="salary-grid">
           ${this.salItem('应出勤天数', sal.shouldDays, `${sal.shouldDays} 天`)}
           ${this.salItem('实际出勤天数', sal.actualDays, `${sal.actualDays} 天`)}
-          ${this.salItem('绩效得分', sal.perfScore, `${sal.perfScore}%`)}
+          ${isHourly
+            ? this.salItem('实际工时', sal.actualHours, `${sal.actualHours} 小时 (${sal.actualDays}×${t.dailyHours||8}h)`)
+            : this.salItem('绩效得分', sal.perfScore, `${sal.perfScore}%`)}
         </div>
-        <div style="margin-top:12px">
-          <button class="btn btn-secondary btn-sm" onclick="App.openSalaryEdit('${t.id}')">✏️ 修改本月出勤/绩效</button>
-        </div>
+        ${!isHourly ? `<div style="margin-top:12px"><button class="btn btn-secondary btn-sm" onclick="App.openSalaryEdit('${t.id}')">✏️ 修改本月出勤/绩效</button></div>` : `<div style="margin-top:12px"><button class="btn btn-secondary btn-sm" onclick="App.openAbsentModal('${t.id}')">📅 去考勤管理标记缺勤</button></div>`}
       </div>
 
       <div class="salary-section">
         <div class="salary-section-title">💰 工资构成</div>
         <div class="salary-grid">
-          ${this.salItem('基本工资', sal.baseSalary, fmtMoney(sal.baseSalary))}
-          ${this.salItem('绩效工资', sal.perfSalary, fmtMoney(sal.perfSalary) + ` = ${fmtMoney(sal.perfBase)} × ${sal.perfScore}%`)}
-          ${this.salItem('全勤奖', sal.fullAttendBonus, !isFullTime
+          ${isHourly
+            ? this.salItem('时薪工资', sal.hourlySalary, fmtMoney(sal.hourlySalary) + ` = ${fmtMoney(t.hourlyRate)} × ${sal.actualHours}h`)
+            : this.salItem('基本工资', sal.baseSalary, fmtMoney(sal.baseSalary))}
+          ${!isHourly ? this.salItem('绩效工资', sal.perfSalary, fmtMoney(sal.perfSalary) + ` = ${fmtMoney(sal.perfBase)} × ${sal.perfScore}%`) : ''}
+          ${!isHourly ? this.salItem('全勤奖', sal.fullAttendBonus, !isFullTime
             ? `${fmtMoney(0)} (兼职)`
-            : (sal.fullAttendBonus>0 ? `${fmtMoney(sal.fullAttendBonus)} ✅` : `${fmtMoney(0)} ❌`))}
-          ${this.salItem('绩效津贴', sal.perfAllowance, sal.perfAllowance>0?`${fmtMoney(sal.perfAllowance)} (初中部)`:`${fmtMoney(0)}`)}
+            : (sal.fullAttendBonus>0 ? `${fmtMoney(sal.fullAttendBonus)} ✅` : `${fmtMoney(0)} ❌`)) : ''}
+          ${!isHourly ? this.salItem('绩效津贴', sal.perfAllowance, sal.perfAllowance>0?`${fmtMoney(sal.perfAllowance)} (初中部)`:`${fmtMoney(0)}`) : ''}
           ${this.salItem('课时费', sal.courseFee, fmtMoney(sal.courseFee) + ` (分成${t.shareRate||DB.get().settings.defaultShareRate}%)`)}
           ${this.salItem('岗位补助', sal.postBonus, sal.postBonus>0?`${fmtMoney(sal.postBonus)} (管理岗)`:`${fmtMoney(0)}`)}
           ${this.salItem('交通补贴', sal.transportBonus, sal.transportBonus>0?`${fmtMoney(sal.transportBonus)} (晚辅)`:`${fmtMoney(0)}`)}
@@ -1627,49 +1663,83 @@ const App = {
   calcTeacherSalary(t, month) {
     const rec = t.salaryRecords?.[month] || {};
     const settings = DB.get().settings;
+    const jobType = t.jobType || 'full';
+    const isHourly = jobType === 'hourly';
+    const isFullTime = jobType === 'full';
 
     const shouldDays = rec.shouldDays ?? 22;
-    // 实际出勤 = 应出勤 - 缺勤天数 (从考勤管理自动计算)
-    const absentCount = (rec.absentDays || []).length;
+    // 缺勤记录: absentDays 存日期字符串, absentHalfDays 存半天日期
+    // 统一用 absentRecords: { '日期': 'full'|'half' }
+    const absentRecords = rec.absentRecords || {};
+    // 兼容旧格式 absentDays (全为全天)
+    (rec.absentDays || []).forEach(d => { if (!absentRecords[d]) absentRecords[d] = 'full'; });
+    const fullAbsent = Object.values(absentRecords).filter(v => v === 'full').length;
+    const halfAbsent = Object.values(absentRecords).filter(v => v === 'half').length;
+    const absentCount = fullAbsent + halfAbsent * 0.5;  // 缺勤天数(半天算0.5)
     const actualDays = rec.actualDays ?? (shouldDays - absentCount);
-    const perfScore = rec.perfScore ?? 80;
 
+    if (isHourly) {
+      // ===== 时薪制兼职: 工资 = 时薪 × 实际出勤工时 =====
+      const hourlyRate = Number(t.hourlyRate) || 0;
+      const dailyHours = Number(t.dailyHours) || 8;
+      const actualHours = actualDays * dailyHours;
+      const hourlySalary = Math.round(hourlyRate * actualHours * 100) / 100;
+
+      // 课时费 (时薪制也有课时费)
+      const logs = DB.get().hourLogs.filter(l =>
+        l.teacherId === t.id && l.date.startsWith(month)
+      );
+      const shareRate = t.shareRate ?? settings.defaultShareRate;
+      let courseFee = 0;
+      logs.forEach(l => { courseFee += l.hours * (l.unitPrice||0) * shareRate / 100; });
+
+      const postBonus = t.isAdmin ? (rec.postBonus || 200) : (rec.postBonus || 0);
+      const transportBonus = rec.transportBonus || 0;
+      const socialType = rec.socialType || (t.socialInsurance > 0 ? 'pay' : 'none');
+      const socialAmount = rec.socialInsurance ?? t.socialInsurance ?? 0;
+      const socialDeduction = socialType === 'pay' ? socialAmount : 0;
+      const socialSubsidy = socialType === 'none' ? socialAmount : 0;
+
+      const total = hourlySalary + courseFee + postBonus + transportBonus
+        + socialSubsidy - socialDeduction;
+
+      return {
+        jobType, shouldDays, actualDays, absentCount, actualHours,
+        hourlyRate, hourlySalary,
+        baseSalary: 0, perfBase: 0, perfSalary: 0, perfScore: 0,
+        fullAttendBonus: 0, perfAllowance: 0, courseFee,
+        postBonus, transportBonus,
+        socialType, socialAmount, socialDeduction, socialSubsidy,
+        socialInsurance: socialDeduction,
+        total: Math.round(total * 100) / 100,
+      };
+    }
+
+    // ===== 全职/兼职: 原有逻辑 =====
+    const perfScore = rec.perfScore ?? 80;
     const baseSalary = Number(t.baseSalary) || 0;
     const perfBase = Number(t.perfBase) || 0;
-    // perfScore 是百分比 (如 80 表示 80%), 计算时除以 100
     const perfSalary = Math.round(perfBase * perfScore / 100 * 100) / 100;
 
     // 全勤奖: 全职 + 应出勤 = 实际出勤
-    const isFullTime = (t.jobType || 'full') === 'full';
     const fullAttendBonus = (isFullTime && shouldDays === actualDays && actualDays > 0)
       ? (rec.fullAttendBonus ?? 200) : 0;
 
-    // 绩效津贴: 初中部 + 非寒暑假
-    const isVacation = /^.*(01|02|07|08)$/.test(month);  // 1/2/7/8月视为寒暑假
+    const isVacation = /^.*(01|02|07|08)$/.test(month);
     const perfAllowance = (t.dept === '初中部' && !isVacation)
-      ? (rec.perfAllowance === 0 ? 0 : (rec.perfAllowance ?? 200))
-      : 0;
+      ? (rec.perfAllowance === 0 ? 0 : (rec.perfAllowance ?? 200)) : 0;
 
-    // 课时费: 与小课消耗挂钩
     const logs = DB.get().hourLogs.filter(l =>
       l.teacherId === t.id && l.date.startsWith(month)
     );
     const shareRate = t.shareRate ?? settings.defaultShareRate;
     let courseFee = 0;
-    logs.forEach(l => {
-      courseFee += l.hours * (l.unitPrice||0) * shareRate / 100;
-    });
+    logs.forEach(l => { courseFee += l.hours * (l.unitPrice||0) * shareRate / 100; });
 
-    // 岗位补助
     const postBonus = t.isAdmin ? (rec.postBonus || 200) : (rec.postBonus || 0);
-
-    // 交通补贴 (晚辅期间)
     const transportBonus = rec.transportBonus || 0;
-
-    // 社保: 缴纳=扣除个人部分; 不缴纳=发放社保补贴(加到工资)
     const socialType = rec.socialType || (t.socialInsurance > 0 ? 'pay' : 'none');
     const socialAmount = rec.socialInsurance ?? t.socialInsurance ?? 0;
-    // socialType='pay' → 扣除; socialType='none' → 补贴(加入)
     const socialDeduction = socialType === 'pay' ? socialAmount : 0;
     const socialSubsidy = socialType === 'none' ? socialAmount : 0;
 
@@ -1677,12 +1747,12 @@ const App = {
       + courseFee + postBonus + transportBonus + socialSubsidy - socialDeduction;
 
     return {
-      shouldDays, actualDays, perfScore,
-      baseSalary, perfBase, perfSalary,
+      jobType, shouldDays, actualDays, absentCount,
+      baseSalary, perfBase, perfSalary, perfScore,
       fullAttendBonus, perfAllowance, courseFee,
       postBonus, transportBonus,
       socialType, socialAmount, socialDeduction, socialSubsidy,
-      socialInsurance: socialDeduction, // 兼容旧字段
+      socialInsurance: socialDeduction,
       total: Math.round(total * 100) / 100,
     };
   },
@@ -1694,19 +1764,23 @@ const App = {
     const d = DB.get();
     const teachers = d.teachers;
     const month = this.state.currentMonth;
-    // 获取该月天数
     const [y, m] = month.split('-').map(Number);
     const daysInMonth = new Date(y, m, 0).getDate();
 
-    // 获取每教师的考勤记录
     const getAttendance = (t) => {
       const rec = t.salaryRecords?.[month] || {};
       const shouldDays = rec.shouldDays ?? 22;
-      // 缺勤日期数组, 如 ['2026-07-03','2026-07-15']
-      const absentDays = rec.absentDays || [];
-      const absentCount = absentDays.length;
+      const absentRecords = rec.absentRecords || {};
+      // 兼容旧格式
+      (rec.absentDays || []).forEach(dd => { if (!absentRecords[dd]) absentRecords[dd] = 'full'; });
+      const fullAbsent = Object.values(absentRecords).filter(v => v === 'full').length;
+      const halfAbsent = Object.values(absentRecords).filter(v => v === 'half').length;
+      const absentCount = fullAbsent + halfAbsent * 0.5;
       const actualDays = shouldDays - absentCount;
-      return { shouldDays, absentDays, absentCount, actualDays };
+      const absentLabels = Object.entries(absentRecords).map(([dd, type]) =>
+        `<span class="tag ${type==='half'?'tag-orange':'tag-red'}">${dd.slice(8)}日${type==='half'?'(半)':''}</span>`
+      );
+      return { shouldDays, absentCount, actualDays, absentLabels, hasAbsent: Object.keys(absentRecords).length > 0 };
     };
 
     return `
@@ -1721,8 +1795,8 @@ const App = {
         </div>
 
         <div class="highlight-box">
-          📅 ${month} 共 ${daysInMonth} 天 | 教师默认全部出勤，点「标记缺勤」选择缺勤日期。<br>
-          实际出勤 = 应出勤天数 - 缺勤天数。应出勤天数可在每行单独设置。
+          📅 ${month} 共 ${daysInMonth} 天 | 点击日期循环切换：出勤 → 半天缺勤 → 全天缺勤 → 出勤<br>
+          实际出勤 = 应出勤 - 缺勤天数（半天算 0.5 天）
         </div>
 
         ${teachers.length ? `
@@ -1742,17 +1816,19 @@ const App = {
               <tbody>
                 ${teachers.map(t => {
                   const att = getAttendance(t);
+                  const typeTag = (t.jobType||'full')==='full'?'<span class="tag tag-green">全职</span>'
+                    :(t.jobType==='hourly'?'<span class="tag tag-cyan">时薪</span>':'<span class="tag tag-gray">兼职</span>');
                   return `<tr>
                     <td><strong>${t.name}</strong></td>
-                    <td>${(t.jobType||'full')==='full'?'<span class="tag tag-green">全职</span>':'<span class="tag tag-gray">兼职</span>'}</td>
+                    <td>${typeTag}</td>
                     <td>
                       <input type="number" class="salary-item-input" style="width:60px;text-align:center" value="${att.shouldDays}" min="0" max="${daysInMonth}" onchange="App.setShouldDays('${t.id}', this.value)">
                     </td>
                     <td><strong style="color:${att.absentCount>0?'var(--danger)':'var(--success)'}">${att.absentCount}</strong></td>
                     <td><strong>${att.actualDays}</strong></td>
-                    <td>${att.absentDays.length ? att.absentDays.map(d=>`<span class="tag tag-red">${d.slice(8)}日</span>`).join(' ') : '<span style="color:var(--text-light)">无缺勤</span>'}</td>
+                    <td>${att.hasAbsent ? att.absentLabels.join(' ') : '<span style="color:var(--text-light)">无缺勤</span>'}</td>
                     <td>
-                      <button class="btn btn-ghost btn-sm" onclick="App.openAbsentModal('${t.id}')">${att.absentDays.length?'编辑缺勤':'标记缺勤'}</button>
+                      <button class="btn btn-ghost btn-sm" onclick="App.openAbsentModal('${t.id}')">${att.hasAbsent?'编辑缺勤':'标记缺勤'}</button>
                     </td>
                   </tr>`;
                 }).join('')}
@@ -1772,9 +1848,6 @@ const App = {
     if (!t.salaryRecords) t.salaryRecords = {};
     if (!t.salaryRecords[month]) t.salaryRecords[month] = {};
     t.salaryRecords[month].shouldDays = Number(val)||0;
-    // 同步实际出勤 = 应出勤 - 缺勤
-    const absentCount = (t.salaryRecords[month].absentDays||[]).length;
-    t.salaryRecords[month].actualDays = (Number(val)||0) - absentCount;
     DB.persist();
     toast('应出勤天数已更新');
     this.render();
@@ -1788,19 +1861,22 @@ const App = {
     const [y, m] = month.split('-').map(Number);
     const daysInMonth = new Date(y, m, 0).getDate();
     const rec = t.salaryRecords?.[month] || {};
-    const absentDays = rec.absentDays || [];
+    const absentRecords = rec.absentRecords || {};
+    // 兼容旧格式
+    (rec.absentDays || []).forEach(dd => { if (!absentRecords[dd]) absentRecords[dd] = 'full'; });
 
-    // 生成日期格子
     const dayCells = [];
     for (let day = 1; day <= daysInMonth; day++) {
       const dateStr = `${month}-${String(day).padStart(2,'0')}`;
-      const isAbsent = absentDays.includes(dateStr);
+      const status = absentRecords[dateStr] || 'present';  // present | half | full
       const weekday = new Date(y, m-1, day).getDay();
       const isWeekend = weekday === 0 || weekday === 6;
+      const cls = status === 'full' ? 'absent' : (status === 'half' ? 'half-absent' : '');
+      const label = status === 'full' ? '全天缺' : (status === 'half' ? '半天缺' : '出');
       dayCells.push(`
-        <div class="absent-day-cell ${isAbsent?'absent':''} ${isWeekend?'weekend':''}" data-date="${dateStr}" onclick="App.toggleAbsentDay(this)">
+        <div class="absent-day-cell ${cls} ${isWeekend?'weekend':''}" data-date="${dateStr}" data-status="${status}" onclick="App.cycleAbsentDay(this)">
           <div class="day-num">${day}</div>
-          <div class="day-status">${isAbsent?'缺':'出'}</div>
+          <div class="day-status">${label}</div>
         </div>
       `);
     }
@@ -1812,12 +1888,14 @@ const App = {
       </div>
       <div class="modal-body">
         <div class="highlight-box">
-          点击日期切换「出勤/缺勤」。灰色为周末，红色为缺勤。默认全部出勤。
+          点击日期循环切换：<strong>出勤 → 半天缺 → 全天缺 → 出勤</strong><br>
+          灰色=周末，橙色=半天缺勤，红色=全天缺勤
         </div>
         <div class="absent-calendar">${dayCells.join('')}</div>
-        <div style="margin-top:12px;display:flex;gap:12px;font-size:12px">
+        <div style="margin-top:12px;display:flex;gap:12px;font-size:12px;flex-wrap:wrap">
           <span><span class="dot dot-green"></span>出勤</span>
-          <span><span class="dot dot-red"></span>缺勤</span>
+          <span><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--accent);margin-right:6px"></span>半天缺勤</span>
+          <span><span class="dot dot-red"></span>全天缺勤</span>
           <span style="color:var(--text-light)">灰色背景=周末</span>
         </div>
         <div id="absentSummary" style="margin-top:12px;padding:10px;background:var(--primary-light);border-radius:8px;font-size:13px"></div>
@@ -1832,26 +1910,36 @@ const App = {
     this.updateAbsentSummary();
   },
 
-  toggleAbsentDay(el) {
-    el.classList.toggle('absent');
-    const status = el.querySelector('.day-status');
-    status.textContent = el.classList.contains('absent') ? '缺' : '出';
+  cycleAbsentDay(el) {
+    // 循环: present → half → full → present
+    const cur = el.dataset.status || 'present';
+    let next, cls, label;
+    if (cur === 'present') { next = 'half'; cls = 'half-absent'; label = '半天缺'; }
+    else if (cur === 'half') { next = 'full'; cls = 'absent'; label = '全天缺'; }
+    else { next = 'present'; cls = ''; label = '出'; }
+    el.dataset.status = next;
+    el.className = 'absent-day-cell ' + cls + (el.classList.contains('weekend') ? ' weekend' : '');
+    el.querySelector('.day-status').textContent = label;
     this.updateAbsentSummary();
   },
 
   updateAbsentSummary() {
-    const absentCells = $$('.absent-day-cell.absent');
-    const count = absentCells.length;
+    const cells = $$('.absent-day-cell');
+    let full = 0, half = 0;
+    cells.forEach(el => {
+      const s = el.dataset.status;
+      if (s === 'full') full++;
+      else if (s === 'half') half++;
+    });
+    const total = full + half * 0.5;
     const el = $('#absentSummary');
-    if (!el) return;
-    const shouldDays = Number($$('.absent-day-cell').length > 0) ? null : 0; // placeholder
-    // 从考勤页面的应出勤天数读取 (或者用默认)
-    el.innerHTML = `已标记缺勤 <strong style="color:var(--danger)">${count}</strong> 天`;
+    if (el) el.innerHTML = `全天缺勤 <strong style="color:var(--danger)">${full}</strong> 天，半天缺勤 <strong style="color:var(--accent)">${half}</strong> 天，合计 <strong style="color:var(--danger)">${total}</strong> 天`;
   },
 
   clearAllAbsent() {
-    $$('.absent-day-cell.absent').forEach(el => {
-      el.classList.remove('absent');
+    $$('.absent-day-cell').forEach(el => {
+      el.dataset.status = 'present';
+      el.classList.remove('absent', 'half-absent');
       el.querySelector('.day-status').textContent = '出';
     });
     this.updateAbsentSummary();
@@ -1864,11 +1952,18 @@ const App = {
     const month = this.state.currentMonth;
     if (!t.salaryRecords) t.salaryRecords = {};
     if (!t.salaryRecords[month]) t.salaryRecords[month] = {};
-    // 收集缺勤日期
-    const absentDays = $$('.absent-day-cell.absent').map(el => el.dataset.date);
+    // 收集缺勤记录
+    const absentRecords = {};
+    $$('.absent-day-cell').forEach(el => {
+      const s = el.dataset.status;
+      if (s === 'full' || s === 'half') absentRecords[el.dataset.date] = s;
+    });
     const shouldDays = t.salaryRecords[month].shouldDays ?? 22;
-    t.salaryRecords[month].absentDays = absentDays;
-    t.salaryRecords[month].actualDays = shouldDays - absentDays.length;
+    const fullAbsent = Object.values(absentRecords).filter(v => v === 'full').length;
+    const halfAbsent = Object.values(absentRecords).filter(v => v === 'half').length;
+    t.salaryRecords[month].absentRecords = absentRecords;
+    t.salaryRecords[month].absentDays = Object.keys(absentRecords); // 兼容
+    t.salaryRecords[month].actualDays = shouldDays - fullAbsent - halfAbsent * 0.5;
     DB.persist();
     this.closeModal();
     toast(`已保存 ${t.name} 的考勤记录`);
@@ -1922,13 +2017,15 @@ const App = {
               </tr>
             </thead>
             <tbody>
-              ${rows.length ? rows.map(({t,sal}) => `
+              ${rows.length ? rows.map(({t,sal}) => {
+                const isHourly = t.jobType === 'hourly';
+                return `
                 <tr>
-                  <td><strong>${t.name}</strong><br><span style="font-size:11px;color:var(--text-light)">${t.dept} · ${t.level||''}</span></td>
-                  <td>${fmtMoney(sal.baseSalary)}</td>
-                  <td>${fmtMoney(sal.perfSalary)}<br><span style="font-size:10px;color:var(--text-light)">${sal.perfBase}×${sal.perfScore}%</span></td>
-                  <td>${(t.jobType||'full')==='part'?'<span style="color:var(--text-light)">兼职</span>':(sal.fullAttendBonus>0?`<span style="color:var(--success)">${fmtMoney(sal.fullAttendBonus)}</span>`:'-')}</td>
-                  <td>${sal.perfAllowance>0?fmtMoney(sal.perfAllowance):'-'}</td>
+                  <td><strong>${t.name}</strong><br><span style="font-size:11px;color:var(--text-light)">${t.dept} · ${isHourly?'时薪':(t.level||'')} ${isHourly?`(${fmtMoney(t.hourlyRate)}/h)`:''}</span></td>
+                  <td>${isHourly ? `<span style="color:var(--text-light)">—</span>` : fmtMoney(sal.baseSalary)}</td>
+                  <td>${isHourly ? `<span style="color:var(--cyan)">${fmtMoney(sal.hourlySalary)}</span><br><span style="font-size:10px;color:var(--text-light)">${fmtMoney(t.hourlyRate)}×${sal.actualHours}h</span>` : `${fmtMoney(sal.perfSalary)}<br><span style="font-size:10px;color:var(--text-light)">${sal.perfBase}×${sal.perfScore}%</span>`}</td>
+                  <td>${isHourly ? '<span style="color:var(--text-light)">—</span>' : ((t.jobType||'full')==='part'?'<span style="color:var(--text-light)">兼职</span>':(sal.fullAttendBonus>0?`<span style="color:var(--success)">${fmtMoney(sal.fullAttendBonus)}</span>`:'-'))}</td>
+                  <td>${isHourly ? '-' : (sal.perfAllowance>0?fmtMoney(sal.perfAllowance):'-')}</td>
                   <td>${sal.courseFee>0?fmtMoney(sal.courseFee):'-'}</td>
                   <td>${sal.postBonus>0?fmtMoney(sal.postBonus):'-'}</td>
                   <td>${sal.transportBonus>0?fmtMoney(sal.transportBonus):'-'}</td>
@@ -1943,7 +2040,7 @@ const App = {
                     <button class="btn btn-ghost btn-sm" onclick="App.openTeacherDetail('${t.id}')">详情</button>
                   </td>
                 </tr>
-              `).join('') : `<tr><td colspan="11" class="table-empty">暂无教师</td></tr>`}
+              `;}).join('') : `<tr><td colspan="11" class="table-empty">暂无教师</td></tr>`}
             </tbody>
             <tfoot>
               <tr style="background:var(--primary-light);font-weight:700">
@@ -3040,11 +3137,12 @@ ON CONFLICT (id) DO NOTHING;`;
     }
 
     if (type === 'teachers' || type === 'all') {
-      const rows = [['姓名','部门','类型','职级','科目','电话','基本工资','绩效基数','小课分成(%)','社保','管理岗','备注']];
+      const rows = [['姓名','部门','类型','职级','科目','电话','基本工资','绩效基数','小课分成(%)','时薪(元/h)','每日工时','社保','管理岗','备注']];
       d.teachers.forEach(t => {
         rows.push([
-          t.name, t.dept||'', (t.jobType||'full')==='full'?'全职':'兼职', t.level||'', t.subject||'', t.phone||'',
+          t.name, t.dept||'', (t.jobType||'full')==='full'?'全职':(t.jobType==='hourly'?'时薪制':'兼职'), t.level||'', t.subject||'', t.phone||'',
           t.baseSalary||0, t.perfBase||0, t.shareRate||d.settings.defaultShareRate,
+          t.hourlyRate||0, t.dailyHours||8,
           t.socialType==='pay'?'缴纳'+(t.socialInsurance||0):'不缴纳'+(t.socialInsurance||0),
           t.isAdmin?'是':'否', t.notes||''
         ]);
@@ -3082,14 +3180,20 @@ ON CONFLICT (id) DO NOTHING;`;
 
     if (type === 'salary' || type === 'all') {
       const month = this.state.currentMonth;
-      const rows = [['教师','部门','类型','职级','基本工资','绩效基数','绩效得分(%)','绩效工资','应出勤','实际出勤','全勤奖','绩效津贴','课时费','岗位补助','交通补贴','社保类型','社保金额','实发工资','月份']];
+      const rows = [['教师','部门','类型','职级','基本工资/时薪','绩效基数','绩效得分(%)','绩效工资/时薪工资','应出勤','实际出勤','全勤奖','绩效津贴','课时费','岗位补助','交通补贴','社保类型','社保金额','实发工资','月份']];
       d.teachers.forEach(t => {
         const sal = this.calcTeacherSalary(t, month);
+        const isHourly = t.jobType === 'hourly';
         rows.push([
-          t.name, t.dept||'', (t.jobType||'full')==='full'?'全职':'兼职', t.level||'',
-          sal.baseSalary, sal.perfBase, sal.perfScore, sal.perfSalary,
-          sal.shouldDays, sal.actualDays, sal.fullAttendBonus,
-          sal.perfAllowance, sal.courseFee, sal.postBonus, sal.transportBonus,
+          t.name, t.dept||'', (t.jobType||'full')==='full'?'全职':(t.jobType==='hourly'?'时薪制':'兼职'), t.level||'',
+          isHourly ? (t.hourlyRate||0)+'元/h' : sal.baseSalary,
+          isHourly ? '-' : sal.perfBase,
+          isHourly ? '-' : sal.perfScore,
+          isHourly ? sal.hourlySalary : sal.perfSalary,
+          sal.shouldDays, sal.actualDays,
+          isHourly ? '-' : sal.fullAttendBonus,
+          isHourly ? '-' : sal.perfAllowance,
+          sal.courseFee, sal.postBonus, sal.transportBonus,
           sal.socialType==='pay'?'缴纳扣除':'不缴纳补贴',
           sal.socialType==='pay'?sal.socialDeduction:sal.socialSubsidy,
           sal.total, month

@@ -1147,6 +1147,20 @@ tbody tr:last-child td {
   font-weight: 600;
 }
 
+.absent-day-cell.half-absent {
+  background: #fef3e2;
+  border-color: var(--accent);
+}
+
+.absent-day-cell.half-absent .day-num {
+  color: var(--accent);
+}
+
+.absent-day-cell.half-absent .day-status {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 @media (max-width: 768px) {
   .absent-calendar {
     grid-template-columns: repeat(7, 1fr);
