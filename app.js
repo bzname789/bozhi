@@ -1518,6 +1518,7 @@ const App = {
           ${this.salItem('课时费', sal.courseFee, fmtMoney(sal.courseFee) + ` (分成${t.shareRate||DB.get().settings.defaultShareRate}%)`)}
           ${this.salItem('岗位补助', sal.postBonus, sal.postBonus>0?`${fmtMoney(sal.postBonus)} (管理岗)`:`${fmtMoney(0)}`)}
           ${this.salItem('交通补贴', sal.transportBonus, sal.transportBonus>0?`${fmtMoney(sal.transportBonus)} (晚辅)`:`${fmtMoney(0)}`)}
+          ${!isHourly && sal.leaveDeduction > 0 ? this.salItem('请假扣除', sal.leaveDeduction, `-${fmtMoney(sal.leaveDeduction)} = ${fmtMoney(sal.baseSalary)}÷${sal.shouldDays}×${sal.absentCount}`) : ''}
           ${this.salItem('社保', sal.socialType, sal.socialType==='pay'
             ? `-${fmtMoney(sal.socialDeduction)} (扣除)`
             : `${sal.socialSubsidy>0?'+'+fmtMoney(sal.socialSubsidy):''} ${sal.socialSubsidy>0?'(补贴)':'(无)'}`)}
@@ -1721,6 +1722,10 @@ const App = {
     const perfBase = Number(t.perfBase) || 0;
     const perfSalary = Math.round(perfBase * perfScore / 100 * 100) / 100;
 
+    // 请假扣除工资 = 基本工资 / 应出勤天数 × 请假天数
+    const leaveDeduction = (shouldDays > 0 && absentCount > 0)
+      ? Math.round(baseSalary / shouldDays * absentCount * 100) / 100 : 0;
+
     // 全勤奖: 全职 + 应出勤 = 实际出勤
     const fullAttendBonus = (isFullTime && shouldDays === actualDays && actualDays > 0)
       ? (rec.fullAttendBonus ?? 200) : 0;
@@ -1744,11 +1749,13 @@ const App = {
     const socialSubsidy = socialType === 'none' ? socialAmount : 0;
 
     const total = baseSalary + perfSalary + fullAttendBonus + perfAllowance
-      + courseFee + postBonus + transportBonus + socialSubsidy - socialDeduction;
+      + courseFee + postBonus + transportBonus + socialSubsidy
+      - socialDeduction - leaveDeduction;
 
     return {
       jobType, shouldDays, actualDays, absentCount,
       baseSalary, perfBase, perfSalary, perfScore,
+      leaveDeduction,
       fullAttendBonus, perfAllowance, courseFee,
       postBonus, transportBonus,
       socialType, socialAmount, socialDeduction, socialSubsidy,
@@ -2011,6 +2018,7 @@ const App = {
                 <th>课时费</th>
                 <th>岗位补助</th>
                 <th>交通补贴</th>
+                <th>请假扣除</th>
                 <th>社保</th>
                 <th>实发</th>
                 <th>操作</th>
@@ -2029,6 +2037,7 @@ const App = {
                   <td>${sal.courseFee>0?fmtMoney(sal.courseFee):'-'}</td>
                   <td>${sal.postBonus>0?fmtMoney(sal.postBonus):'-'}</td>
                   <td>${sal.transportBonus>0?fmtMoney(sal.transportBonus):'-'}</td>
+                  <td>${(!isHourly && sal.leaveDeduction>0) ? `<span style="color:var(--danger)">-${fmtMoney(sal.leaveDeduction)}</span><br><span style="font-size:10px;color:var(--text-light)">${sal.absentCount}天</span>` : '-'}</td>
                   <td>${sal.socialType==='pay'
                     ? `<span style="color:var(--danger)">-${fmtMoney(sal.socialDeduction)}</span>`
                     : (sal.socialSubsidy>0
@@ -2040,12 +2049,12 @@ const App = {
                     <button class="btn btn-ghost btn-sm" onclick="App.openTeacherDetail('${t.id}')">详情</button>
                   </td>
                 </tr>
-              `;}).join('') : `<tr><td colspan="11" class="table-empty">暂无教师</td></tr>`}
+              `;}).join('') : `<tr><td colspan="12" class="table-empty">暂无教师</td></tr>`}
             </tbody>
             <tfoot>
               <tr style="background:var(--primary-light);font-weight:700">
                 <td>合计</td>
-                <td colspan="8"></td>
+                <td colspan="9"></td>
                 <td style="color:var(--primary);font-size:16px">${fmtMoney(grandTotal)}</td>
                 <td></td>
               </tr>
@@ -3180,7 +3189,7 @@ ON CONFLICT (id) DO NOTHING;`;
 
     if (type === 'salary' || type === 'all') {
       const month = this.state.currentMonth;
-      const rows = [['教师','部门','类型','职级','基本工资/时薪','绩效基数','绩效得分(%)','绩效工资/时薪工资','应出勤','实际出勤','全勤奖','绩效津贴','课时费','岗位补助','交通补贴','社保类型','社保金额','实发工资','月份']];
+      const rows = [['教师','部门','类型','职级','基本工资/时薪','绩效基数','绩效得分(%)','绩效工资/时薪工资','应出勤','实际出勤','请假天数','请假扣除','全勤奖','绩效津贴','课时费','岗位补助','交通补贴','社保类型','社保金额','实发工资','月份']];
       d.teachers.forEach(t => {
         const sal = this.calcTeacherSalary(t, month);
         const isHourly = t.jobType === 'hourly';
@@ -3191,6 +3200,8 @@ ON CONFLICT (id) DO NOTHING;`;
           isHourly ? '-' : sal.perfScore,
           isHourly ? sal.hourlySalary : sal.perfSalary,
           sal.shouldDays, sal.actualDays,
+          isHourly ? '-' : sal.absentCount,
+          isHourly ? '-' : sal.leaveDeduction,
           isHourly ? '-' : sal.fullAttendBonus,
           isHourly ? '-' : sal.perfAllowance,
           sal.courseFee, sal.postBonus, sal.transportBonus,
