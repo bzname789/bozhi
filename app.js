@@ -470,6 +470,7 @@ const App = {
       { key: 'dashboard', label: '工作台',   icon: '🏠', group: '主要' },
       { key: 'students',  label: '学生管理', icon: '👥', group: '主要' },
       { key: 'teachers',  label: '教师管理', icon: '🧑‍🏫', group: '主要' },
+      { key: 'attendance',label: '考勤管理', icon: '📅', group: '业务' },
       { key: 'hours',     label: '课时消耗', icon: '⏱️', group: '业务' },
       { key: 'salary',    label: '工资结算', icon: '💸', group: '业务' },
       { key: 'finance',   label: '收支总览', icon: '📊', group: '业务' },
@@ -524,6 +525,7 @@ const App = {
       case 'dashboard': content = this.viewDashboard(); break;
       case 'students':  content = this.viewStudents(); break;
       case 'teachers':  content = this.viewTeachers(); break;
+      case 'attendance':content = this.viewAttendance(); break;
       case 'salary':    content = this.viewSalary(); break;
       case 'hours':     content = this.viewHours(); break;
       case 'finance':   content = this.viewFinance(); break;
@@ -1520,8 +1522,9 @@ const App = {
             <input class="form-input" type="number" id="se_should" value="${rec.shouldDays ?? 22}">
           </div>
           <div class="form-group">
-            <label class="form-label">实际出勤天数</label>
-            <input class="form-input" type="number" id="se_actual" value="${rec.actualDays ?? 22}">
+            <label class="form-label">实际出勤天数<span class="hint">自动计算</span></label>
+            <input class="form-input" type="number" id="se_actual" value="${rec.actualDays ?? ((rec.shouldDays ?? 22) - (rec.absentDays||[]).length)}" readonly style="background:#f3f4f6">
+            <div class="form-hint">去「考勤管理」标记缺勤，此处自动更新</div>
           </div>
           <div class="form-group">
             <label class="form-label">绩效得分 (0-100%)</label>
@@ -1588,10 +1591,15 @@ const App = {
     if (!t) return;
     const monthKey = this.state.currentMonth;
     if (!t.salaryRecords) t.salaryRecords = {};
+    const oldRec = t.salaryRecords[monthKey] || {};
     const socialType = $('#se_social_type').value;
+    const shouldDays = Number($('#se_should').value)||0;
+    const absentDays = oldRec.absentDays || [];
+    const actualDays = shouldDays - absentDays.length;
     t.salaryRecords[monthKey] = {
-      shouldDays: Number($('#se_should').value)||0,
-      actualDays: Number($('#se_actual').value)||0,
+      shouldDays,
+      actualDays,
+      absentDays,  // 保留考勤记录
       perfScore: Number($('#se_perf').value)||0,
       fullAttendBonus: Number($('#se_full').value)||0,
       perfAllowance: Number($('#se_perfallow').value)||0,
@@ -1621,7 +1629,9 @@ const App = {
     const settings = DB.get().settings;
 
     const shouldDays = rec.shouldDays ?? 22;
-    const actualDays = rec.actualDays ?? 22;
+    // 实际出勤 = 应出勤 - 缺勤天数 (从考勤管理自动计算)
+    const absentCount = (rec.absentDays || []).length;
+    const actualDays = rec.actualDays ?? (shouldDays - absentCount);
     const perfScore = rec.perfScore ?? 80;
 
     const baseSalary = Number(t.baseSalary) || 0;
@@ -1675,6 +1685,194 @@ const App = {
       socialInsurance: socialDeduction, // 兼容旧字段
       total: Math.round(total * 100) / 100,
     };
+  },
+
+  /* ====================================================================
+   *  视图: 考勤管理
+   * ================================================================== */
+  viewAttendance() {
+    const d = DB.get();
+    const teachers = d.teachers;
+    const month = this.state.currentMonth;
+    // 获取该月天数
+    const [y, m] = month.split('-').map(Number);
+    const daysInMonth = new Date(y, m, 0).getDate();
+
+    // 获取每教师的考勤记录
+    const getAttendance = (t) => {
+      const rec = t.salaryRecords?.[month] || {};
+      const shouldDays = rec.shouldDays ?? 22;
+      // 缺勤日期数组, 如 ['2026-07-03','2026-07-15']
+      const absentDays = rec.absentDays || [];
+      const absentCount = absentDays.length;
+      const actualDays = shouldDays - absentCount;
+      return { shouldDays, absentDays, absentCount, actualDays };
+    };
+
+    return `
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title"><span class="title-icon"></span>考勤管理</div>
+          <div class="month-selector">
+            <button class="month-nav-btn" onclick="App.state.currentMonth=monthNav(App.state.currentMonth,-1); App.render()">‹</button>
+            <input type="month" value="${month}" onchange="App.state.currentMonth=this.value; App.render()">
+            <button class="month-nav-btn" onclick="App.state.currentMonth=monthNav(App.state.currentMonth,1); App.render()">›</button>
+          </div>
+        </div>
+
+        <div class="highlight-box">
+          📅 ${month} 共 ${daysInMonth} 天 | 教师默认全部出勤，点「标记缺勤」选择缺勤日期。<br>
+          实际出勤 = 应出勤天数 - 缺勤天数。应出勤天数可在每行单独设置。
+        </div>
+
+        ${teachers.length ? `
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>教师</th>
+                  <th>类型</th>
+                  <th>应出勤</th>
+                  <th>缺勤天数</th>
+                  <th>实际出勤</th>
+                  <th>缺勤日期</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${teachers.map(t => {
+                  const att = getAttendance(t);
+                  return `<tr>
+                    <td><strong>${t.name}</strong></td>
+                    <td>${(t.jobType||'full')==='full'?'<span class="tag tag-green">全职</span>':'<span class="tag tag-gray">兼职</span>'}</td>
+                    <td>
+                      <input type="number" class="salary-item-input" style="width:60px;text-align:center" value="${att.shouldDays}" min="0" max="${daysInMonth}" onchange="App.setShouldDays('${t.id}', this.value)">
+                    </td>
+                    <td><strong style="color:${att.absentCount>0?'var(--danger)':'var(--success)'}">${att.absentCount}</strong></td>
+                    <td><strong>${att.actualDays}</strong></td>
+                    <td>${att.absentDays.length ? att.absentDays.map(d=>`<span class="tag tag-red">${d.slice(8)}日</span>`).join(' ') : '<span style="color:var(--text-light)">无缺勤</span>'}</td>
+                    <td>
+                      <button class="btn btn-ghost btn-sm" onclick="App.openAbsentModal('${t.id}')">${att.absentDays.length?'编辑缺勤':'标记缺勤'}</button>
+                    </td>
+                  </tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        ` : `<div class="empty-state"><div class="empty-state-icon">📅</div><div class="empty-state-text">暂无教师，请先添加教师</div></div>`}
+      </div>
+    `;
+  },
+
+  setShouldDays(teacherId, val) {
+    const d = DB.get();
+    const t = d.teachers.find(x=>x.id===teacherId);
+    if (!t) return;
+    const month = this.state.currentMonth;
+    if (!t.salaryRecords) t.salaryRecords = {};
+    if (!t.salaryRecords[month]) t.salaryRecords[month] = {};
+    t.salaryRecords[month].shouldDays = Number(val)||0;
+    // 同步实际出勤 = 应出勤 - 缺勤
+    const absentCount = (t.salaryRecords[month].absentDays||[]).length;
+    t.salaryRecords[month].actualDays = (Number(val)||0) - absentCount;
+    DB.persist();
+    toast('应出勤天数已更新');
+    this.render();
+  },
+
+  openAbsentModal(teacherId) {
+    const d = DB.get();
+    const t = d.teachers.find(x=>x.id===teacherId);
+    if (!t) return;
+    const month = this.state.currentMonth;
+    const [y, m] = month.split('-').map(Number);
+    const daysInMonth = new Date(y, m, 0).getDate();
+    const rec = t.salaryRecords?.[month] || {};
+    const absentDays = rec.absentDays || [];
+
+    // 生成日期格子
+    const dayCells = [];
+    for (let day = 1; day <= daysInMonth; day++) {
+      const dateStr = `${month}-${String(day).padStart(2,'0')}`;
+      const isAbsent = absentDays.includes(dateStr);
+      const weekday = new Date(y, m-1, day).getDay();
+      const isWeekend = weekday === 0 || weekday === 6;
+      dayCells.push(`
+        <div class="absent-day-cell ${isAbsent?'absent':''} ${isWeekend?'weekend':''}" data-date="${dateStr}" onclick="App.toggleAbsentDay(this)">
+          <div class="day-num">${day}</div>
+          <div class="day-status">${isAbsent?'缺':'出'}</div>
+        </div>
+      `);
+    }
+
+    this.openModal(`
+      <div class="modal-header">
+        <div class="modal-title">标记缺勤 · ${t.name} (${month})</div>
+        <button class="modal-close" data-close-modal>×</button>
+      </div>
+      <div class="modal-body">
+        <div class="highlight-box">
+          点击日期切换「出勤/缺勤」。灰色为周末，红色为缺勤。默认全部出勤。
+        </div>
+        <div class="absent-calendar">${dayCells.join('')}</div>
+        <div style="margin-top:12px;display:flex;gap:12px;font-size:12px">
+          <span><span class="dot dot-green"></span>出勤</span>
+          <span><span class="dot dot-red"></span>缺勤</span>
+          <span style="color:var(--text-light)">灰色背景=周末</span>
+        </div>
+        <div id="absentSummary" style="margin-top:12px;padding:10px;background:var(--primary-light);border-radius:8px;font-size:13px"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="App.clearAllAbsent()">全部出勤</button>
+        <button class="btn btn-secondary" data-close-modal>取消</button>
+        <button class="btn btn-primary" onclick="App.saveAbsent('${teacherId}')">保存</button>
+      </div>
+    `);
+
+    this.updateAbsentSummary();
+  },
+
+  toggleAbsentDay(el) {
+    el.classList.toggle('absent');
+    const status = el.querySelector('.day-status');
+    status.textContent = el.classList.contains('absent') ? '缺' : '出';
+    this.updateAbsentSummary();
+  },
+
+  updateAbsentSummary() {
+    const absentCells = $$('.absent-day-cell.absent');
+    const count = absentCells.length;
+    const el = $('#absentSummary');
+    if (!el) return;
+    const shouldDays = Number($$('.absent-day-cell').length > 0) ? null : 0; // placeholder
+    // 从考勤页面的应出勤天数读取 (或者用默认)
+    el.innerHTML = `已标记缺勤 <strong style="color:var(--danger)">${count}</strong> 天`;
+  },
+
+  clearAllAbsent() {
+    $$('.absent-day-cell.absent').forEach(el => {
+      el.classList.remove('absent');
+      el.querySelector('.day-status').textContent = '出';
+    });
+    this.updateAbsentSummary();
+  },
+
+  saveAbsent(teacherId) {
+    const d = DB.get();
+    const t = d.teachers.find(x=>x.id===teacherId);
+    if (!t) return;
+    const month = this.state.currentMonth;
+    if (!t.salaryRecords) t.salaryRecords = {};
+    if (!t.salaryRecords[month]) t.salaryRecords[month] = {};
+    // 收集缺勤日期
+    const absentDays = $$('.absent-day-cell.absent').map(el => el.dataset.date);
+    const shouldDays = t.salaryRecords[month].shouldDays ?? 22;
+    t.salaryRecords[month].absentDays = absentDays;
+    t.salaryRecords[month].actualDays = shouldDays - absentDays.length;
+    DB.persist();
+    this.closeModal();
+    toast(`已保存 ${t.name} 的考勤记录`);
+    this.render();
   },
 
   /* ====================================================================
