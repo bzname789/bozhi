@@ -1606,7 +1606,8 @@ const App = {
 
     const baseSalary = Number(t.baseSalary) || 0;
     const perfBase = Number(t.perfBase) || 0;
-    const perfSalary = Math.round(perfBase * perfScore * 100) / 100;
+    // perfScore 是百分比 (如 80 表示 80%), 计算时除以 100
+    const perfSalary = Math.round(perfBase * perfScore / 100 * 100) / 100;
 
     // 全勤奖: 应出勤 = 实际出勤
     const fullAttendBonus = (shouldDays === actualDays && actualDays > 0)
