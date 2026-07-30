@@ -1146,13 +1146,14 @@ const App = {
         </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>姓名</th><th>部门</th><th>职级</th><th>科目</th><th>分成比例</th><th>本月工资</th><th>操作</th></tr></thead>
+            <thead><tr><th>姓名</th><th>部门</th><th>类型</th><th>职级</th><th>科目</th><th>分成比例</th><th>本月工资</th><th>操作</th></tr></thead>
             <tbody>
               ${list.length ? list.filter(t => !this.state.search || t.name.includes(this.state.search) || (t.subject||'').includes(this.state.search)).map(t => {
                 const sal = this.calcTeacherSalary(t, this.state.currentMonth);
                 return `<tr>
                   <td><strong>${t.name}</strong>${t.isAdmin?'<span class="tag tag-orange">管理岗</span>':''}</td>
                   <td>${t.dept||'-'}</td>
+                  <td>${(t.jobType||'full')==='full'?'<span class="tag tag-green">全职</span>':'<span class="tag tag-gray">兼职</span>'}</td>
                   <td>${t.level||'-'}</td>
                   <td>${t.subject||'-'}</td>
                   <td>${t.shareRate||DB.get().settings.defaultShareRate}%</td>
@@ -1164,7 +1165,7 @@ const App = {
                     <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="App.delTeacher('${t.id}')">删除</button>
                   </td>
                 </tr>`;
-              }).join('') : `<tr><td colspan="7" class="table-empty">暂无教师</td></tr>`}
+              }).join('') : `<tr><td colspan="8" class="table-empty">暂无教师</td></tr>`}
             </tbody>
           </table>
         </div>
@@ -1178,7 +1179,7 @@ const App = {
     const data = t || {
       name:'', dept:'小学部', level:'初级教师', subject:'', phone:'',
       baseSalary: 0, perfBase: 0, shareRate: DB.get().settings.defaultShareRate,
-      socialInsurance: 0, isAdmin: false, notes:'',
+      socialInsurance: 0, socialType: 'none', isAdmin: false, jobType: 'full', notes:'',
     };
 
     this.openModal(`
@@ -1213,19 +1214,27 @@ const App = {
         </div>
         <div class="form-row">
           <div class="form-group">
-            <label class="form-label">联系电话</label>
-            <input class="form-input" id="tf_phone" value="${data.phone||''}">
+            <label class="form-label">教师类型</label>
+            <div class="radio-group" id="tf_jobtype">
+              <div class="radio-item ${(data.jobType||'full')==='full'?'checked':''}" data-key="full">全职（享全勤奖）</div>
+              <div class="radio-item ${data.jobType==='part'?'checked':''}" data-key="part">兼职（无全勤奖）</div>
+            </div>
           </div>
           <div class="form-group">
-            <label class="form-label">基本工资 (元)<span class="hint">自定义</span></label>
-            <input class="form-input" type="number" id="tf_base" value="${data.baseSalary||0}">
+            <label class="form-label">联系电话</label>
+            <input class="form-input" id="tf_phone" value="${data.phone||''}">
           </div>
         </div>
         <div class="form-row">
           <div class="form-group">
+            <label class="form-label">基本工资 (元)<span class="hint">自定义</span></label>
+            <input class="form-input" type="number" id="tf_base" value="${data.baseSalary||0}">
+          </div>
+          <div class="form-group">
             <label class="form-label">绩效基数 (元)<span class="hint">自定义</span></label>
             <input class="form-input" type="number" id="tf_perfbase" value="${data.perfBase||0}">
           </div>
+        </div>
           <div class="form-group">
             <label class="form-label">小课分成比例 (%)<span class="hint">教师拿的比例</span></label>
             <input class="form-input" type="number" id="tf_share" value="${data.shareRate||DB.get().settings.defaultShareRate}" min="0" max="100">
@@ -1266,6 +1275,12 @@ const App = {
         el.classList.add('checked');
       };
     });
+    $$('#tf_jobtype .radio-item').forEach(el => {
+      el.onclick = () => {
+        $$('#tf_jobtype .radio-item').forEach(x=>x.classList.remove('checked'));
+        el.classList.add('checked');
+      };
+    });
   },
 
   saveTeacher() {
@@ -1277,6 +1292,7 @@ const App = {
       level: $('#tf_level').value,
       subject: $('#tf_subject').value.trim(),
       phone: $('#tf_phone').value.trim(),
+      jobType: $$('#tf_jobtype .radio-item.checked')[0]?.dataset.key || 'full',
       baseSalary: Number($('#tf_base').value)||0,
       perfBase: Number($('#tf_perfbase').value)||0,
       shareRate: Number($('#tf_share').value)||0,
@@ -1350,6 +1366,7 @@ const App = {
           <div class="info-item"><span class="info-label">小课分成</span><span class="info-value">${t.shareRate||DB.get().settings.defaultShareRate}%</span></div>
           <div class="info-item"><span class="info-label">社保</span><span class="info-value">${t.socialType==='pay'?`缴纳 (扣${fmtMoney(t.socialInsurance)})`:t.socialType==='none'?`不缴纳 ${t.socialInsurance>0?'(补贴'+fmtMoney(t.socialInsurance)+')':'(无补贴)'}`:'未设置'}</span></div>
           <div class="info-item"><span class="info-label">岗位</span><span class="info-value">${t.isAdmin?'管理岗':'普通教师'}</span></div>
+          <div class="info-item"><span class="info-label">教师类型</span><span class="info-value">${(t.jobType||'full')==='full'?'全职':'兼职'} ${(t.jobType||'full')==='part'?'<span class=\"tag tag-gray\">无全勤奖</span>':'<span class=\"tag tag-green\">享全勤奖</span>'}</span></div>
           <div class="info-item"><span class="info-label">备注</span><span class="info-value">${t.notes||'-'}</span></div>
         </div>
       `;
@@ -1433,6 +1450,7 @@ const App = {
   },
 
   renderTeacherSalaryDetail(t, sal) {
+    const isFullTime = (t.jobType || 'full') === 'full';
     return `
       <div class="highlight-box">
         当前结算月份: ${this.state.currentMonth} | 修改月份请到「工资结算」页面
@@ -1455,7 +1473,9 @@ const App = {
         <div class="salary-grid">
           ${this.salItem('基本工资', sal.baseSalary, fmtMoney(sal.baseSalary))}
           ${this.salItem('绩效工资', sal.perfSalary, fmtMoney(sal.perfSalary) + ` = ${fmtMoney(sal.perfBase)} × ${sal.perfScore}%`)}
-          ${this.salItem('全勤奖', sal.fullAttendBonus, sal.fullAttendBonus>0?`${fmtMoney(sal.fullAttendBonus)} ✅`:`${fmtMoney(0)} ❌`)}
+          ${this.salItem('全勤奖', sal.fullAttendBonus, !isFullTime
+            ? `${fmtMoney(0)} (兼职)`
+            : (sal.fullAttendBonus>0 ? `${fmtMoney(sal.fullAttendBonus)} ✅` : `${fmtMoney(0)} ❌`))}
           ${this.salItem('绩效津贴', sal.perfAllowance, sal.perfAllowance>0?`${fmtMoney(sal.perfAllowance)} (初中部)`:`${fmtMoney(0)}`)}
           ${this.salItem('课时费', sal.courseFee, fmtMoney(sal.courseFee) + ` (分成${t.shareRate||DB.get().settings.defaultShareRate}%)`)}
           ${this.salItem('岗位补助', sal.postBonus, sal.postBonus>0?`${fmtMoney(sal.postBonus)} (管理岗)`:`${fmtMoney(0)}`)}
@@ -1609,8 +1629,9 @@ const App = {
     // perfScore 是百分比 (如 80 表示 80%), 计算时除以 100
     const perfSalary = Math.round(perfBase * perfScore / 100 * 100) / 100;
 
-    // 全勤奖: 应出勤 = 实际出勤
-    const fullAttendBonus = (shouldDays === actualDays && actualDays > 0)
+    // 全勤奖: 全职 + 应出勤 = 实际出勤
+    const isFullTime = (t.jobType || 'full') === 'full';
+    const fullAttendBonus = (isFullTime && shouldDays === actualDays && actualDays > 0)
       ? (rec.fullAttendBonus ?? 200) : 0;
 
     // 绩效津贴: 初中部 + 非寒暑假
@@ -1708,7 +1729,7 @@ const App = {
                   <td><strong>${t.name}</strong><br><span style="font-size:11px;color:var(--text-light)">${t.dept} · ${t.level||''}</span></td>
                   <td>${fmtMoney(sal.baseSalary)}</td>
                   <td>${fmtMoney(sal.perfSalary)}<br><span style="font-size:10px;color:var(--text-light)">${sal.perfBase}×${sal.perfScore}%</span></td>
-                  <td>${sal.fullAttendBonus>0?`<span style="color:var(--success)">${fmtMoney(sal.fullAttendBonus)}</span>`:'-'}</td>
+                  <td>${(t.jobType||'full')==='part'?'<span style="color:var(--text-light)">兼职</span>':(sal.fullAttendBonus>0?`<span style="color:var(--success)">${fmtMoney(sal.fullAttendBonus)}</span>`:'-')}</td>
                   <td>${sal.perfAllowance>0?fmtMoney(sal.perfAllowance):'-'}</td>
                   <td>${sal.courseFee>0?fmtMoney(sal.courseFee):'-'}</td>
                   <td>${sal.postBonus>0?fmtMoney(sal.postBonus):'-'}</td>
@@ -2821,12 +2842,13 @@ ON CONFLICT (id) DO NOTHING;`;
     }
 
     if (type === 'teachers' || type === 'all') {
-      const rows = [['姓名','部门','职级','科目','电话','基本工资','绩效基数','小课分成(%)','社保','管理岗','备注']];
+      const rows = [['姓名','部门','类型','职级','科目','电话','基本工资','绩效基数','小课分成(%)','社保','管理岗','备注']];
       d.teachers.forEach(t => {
         rows.push([
-          t.name, t.dept||'', t.level||'', t.subject||'', t.phone||'',
+          t.name, t.dept||'', (t.jobType||'full')==='full'?'全职':'兼职', t.level||'', t.subject||'', t.phone||'',
           t.baseSalary||0, t.perfBase||0, t.shareRate||d.settings.defaultShareRate,
-          t.socialInsurance||0, t.isAdmin?'是':'否', t.notes||''
+          t.socialType==='pay'?'缴纳'+(t.socialInsurance||0):'不缴纳'+(t.socialInsurance||0),
+          t.isAdmin?'是':'否', t.notes||''
         ]);
       });
       ws2a(rows, '教师列表');
@@ -2862,11 +2884,11 @@ ON CONFLICT (id) DO NOTHING;`;
 
     if (type === 'salary' || type === 'all') {
       const month = this.state.currentMonth;
-      const rows = [['教师','部门','职级','基本工资','绩效基数','绩效得分(%)','绩效工资','应出勤','实际出勤','全勤奖','绩效津贴','课时费','岗位补助','交通补贴','社保类型','社保金额','实发工资','月份']];
+      const rows = [['教师','部门','类型','职级','基本工资','绩效基数','绩效得分(%)','绩效工资','应出勤','实际出勤','全勤奖','绩效津贴','课时费','岗位补助','交通补贴','社保类型','社保金额','实发工资','月份']];
       d.teachers.forEach(t => {
         const sal = this.calcTeacherSalary(t, month);
         rows.push([
-          t.name, t.dept||'', t.level||'',
+          t.name, t.dept||'', (t.jobType||'full')==='full'?'全职':'兼职', t.level||'',
           sal.baseSalary, sal.perfBase, sal.perfScore, sal.perfSalary,
           sal.shouldDays, sal.actualDays, sal.fullAttendBonus,
           sal.perfAllowance, sal.courseFee, sal.postBonus, sal.transportBonus,
