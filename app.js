@@ -330,6 +330,30 @@ const App = {
   },
 
   checkShareMode() {
+    // 管理员共享链接: #admin=1&c=xxxx
+    const am = location.hash.match(/admin=1/);
+    if (am) {
+      // 解析云端配置
+      const cm = location.hash.match(/c=([^&]+)/);
+      if (cm) {
+        try {
+          const decoded = JSON.parse(decodeURIComponent(escape(atob(cm[1]))));
+          if (decoded.u && decoded.k) {
+            const existing = DB.getCloudConfig();
+            if (!existing.url || !existing.key || !existing.enabled) {
+              DB.setCloudConfig({ url: decoded.u, key: decoded.k, enabled: true });
+            }
+          }
+        } catch (e) { console.warn('解析管理员云端配置失败', e); }
+      }
+      // 管理员链接清理 hash, 进入正常工作台模式 (会自动触发 asyncInit 拉取数据)
+      this.shareMode = false;
+      this.shareTeacherId = null;
+      // 不清理 hash, 否则刷新后又变成普通链接 (首次加载后由 asyncInit 处理)
+      return;
+    }
+
+    // 教师消课分享链接: #share=xxxx&c=xxxx
     const m = location.hash.match(/share=([a-z0-9]+)/i);
     if (!m) { this.shareMode = false; this.shareTeacherId = null; return; }
     const code = m[1];
@@ -341,7 +365,6 @@ const App = {
         const decoded = JSON.parse(decodeURIComponent(escape(atob(cm[1]))));
         if (decoded.u && decoded.k) {
           const existing = DB.getCloudConfig();
-          // 仅在本地未配置时写入 (不覆盖管理员已有的配置)
           if (!existing.url || !existing.key) {
             DB.setCloudConfig({ url: decoded.u, key: decoded.k, enabled: true });
           }
@@ -355,8 +378,7 @@ const App = {
       this.shareTeacherId = share.teacherId;
       this.view = 'shareConsume';
     } else {
-      // 分享码本地找不到 — 可能是老师新设备, 数据还没从云端拉下来
-      // 标记为待验证, asyncInit 拉取后会重新 checkShareMode
+      // 分享码本地找不到 — 可能是新设备, 数据还没从云端拉下来
       this.shareMode = true;
       this.shareTeacherId = null;
       this.view = 'shareConsume';
@@ -2222,6 +2244,18 @@ const App = {
         <div class="form-hint" style="margin-top:12px">
           ${DB.getCloudConfig().enabled ? '✅ 已启用。每次修改数据会自动推送云端（防抖800ms），打开页面会自动拉取最新数据。' : '未启用时，数据仅存本地浏览器。'}
         </div>
+
+        ${DB.getCloudConfig().enabled ? `
+          <hr class="divider">
+          <div style="font-weight:600;font-size:13px;margin-bottom:10px">🔗 管理员共享链接</div>
+          <div class="form-hint" style="margin-bottom:10px">
+            把这个链接发给其他管理员，打开后自动连接云端、拉取数据，无需再手动配置。
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <input class="form-input" readonly id="admin_share_link" value="${location.origin + location.pathname + location.search}#admin=1&c=${btoa(unescape(encodeURIComponent(JSON.stringify({u:DB.getCloudConfig().url,k:DB.getCloudConfig().key}))))}" style="font-size:11px;flex:1;min-width:200px" onclick="this.select()">
+            <button class="btn btn-primary btn-sm" onclick="App.copyAdminLink()">📋 复制链接</button>
+          </div>
+        ` : ''}
       </div>
 
       <div class="card">
@@ -2377,6 +2411,11 @@ ON CONFLICT (id) DO NOTHING;`;
     DB.clearCloudConfig();
     toast('已禁用云端同步');
     this.render();
+  },
+
+  copyAdminLink() {
+    const link = $('#admin_share_link').value;
+    navigator.clipboard.writeText(link).then(() => toast('管理员链接已复制'));
   },
 
   exportData() {
