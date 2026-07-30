@@ -1210,8 +1210,15 @@ const App = {
           </div>
         </div>
         <div class="form-group">
-          <label class="form-label">社保扣除 (元)<span class="hint">不交社保填0</span></label>
-          <input class="form-input" type="number" id="tf_social" value="${data.socialInsurance||0}">
+          <label class="form-label">社保</label>
+          <select class="form-select" id="tf_social_type" onchange="App.toggleTeacherSocialType()">
+            <option value="none" ${(!t || !t.socialType || t.socialType==='none')?'selected':''}>不缴纳（发社保补贴）</option>
+            <option value="pay" ${t && t.socialType==='pay'?'selected':''}>缴纳（扣个人部分）</option>
+          </select>
+          <div style="margin-top:8px">
+            <label class="form-label" id="tf_social_label">${t && t.socialType==='pay'?'社保扣除金额 (元)':'社保补贴金额 (元)'}</label>
+            <input class="form-input" type="number" id="tf_social" value="${data.socialInsurance||0}">
+          </div>
         </div>
         <div class="form-group">
           <label class="form-label">岗位</label>
@@ -1251,6 +1258,7 @@ const App = {
       baseSalary: Number($('#tf_base').value)||0,
       perfBase: Number($('#tf_perfbase').value)||0,
       shareRate: Number($('#tf_share').value)||0,
+      socialType: $('#tf_social_type').value,
       socialInsurance: Number($('#tf_social').value)||0,
       isAdmin: $$('#tf_isadmin .radio-item.checked')[0]?.dataset.key === '1',
       notes: $('#tf_notes').value.trim(),
@@ -1278,6 +1286,12 @@ const App = {
     DB.persist();
     toast('已删除');
     this.render();
+  },
+
+  toggleTeacherSocialType() {
+    const type = $('#tf_social_type').value;
+    const label = $('#tf_social_label');
+    if (label) label.textContent = type === 'pay' ? '社保扣除金额 (元)' : '社保补贴金额 (元)';
   },
 
   openTeacherDetail(id) {
@@ -1312,7 +1326,7 @@ const App = {
           <div class="info-item"><span class="info-label">基本工资</span><span class="info-value">${fmtMoney(t.baseSalary)}</span></div>
           <div class="info-item"><span class="info-label">绩效基数</span><span class="info-value">${fmtMoney(t.perfBase)}</span></div>
           <div class="info-item"><span class="info-label">小课分成</span><span class="info-value">${t.shareRate||DB.get().settings.defaultShareRate}%</span></div>
-          <div class="info-item"><span class="info-label">社保</span><span class="info-value">${t.socialInsurance>0?fmtMoney(t.socialInsurance):'未缴纳'}</span></div>
+          <div class="info-item"><span class="info-label">社保</span><span class="info-value">${t.socialType==='pay'?`缴纳 (扣${fmtMoney(t.socialInsurance)})`:t.socialType==='none'?`不缴纳 ${t.socialInsurance>0?'(补贴'+fmtMoney(t.socialInsurance)+')':'(无补贴)'}`:'未设置'}</span></div>
           <div class="info-item"><span class="info-label">岗位</span><span class="info-value">${t.isAdmin?'管理岗':'普通教师'}</span></div>
           <div class="info-item"><span class="info-label">备注</span><span class="info-value">${t.notes||'-'}</span></div>
         </div>
@@ -1407,7 +1421,7 @@ const App = {
         <div class="salary-grid">
           ${this.salItem('应出勤天数', sal.shouldDays, `${sal.shouldDays} 天`)}
           ${this.salItem('实际出勤天数', sal.actualDays, `${sal.actualDays} 天`)}
-          ${this.salItem('绩效得分', sal.perfScore, `${sal.perfScore} 分`)}
+          ${this.salItem('绩效得分', sal.perfScore, `${sal.perfScore}%`)}
         </div>
         <div style="margin-top:12px">
           <button class="btn btn-secondary btn-sm" onclick="App.openSalaryEdit('${t.id}')">✏️ 修改本月出勤/绩效</button>
@@ -1418,13 +1432,15 @@ const App = {
         <div class="salary-section-title">💰 工资构成</div>
         <div class="salary-grid">
           ${this.salItem('基本工资', sal.baseSalary, fmtMoney(sal.baseSalary))}
-          ${this.salItem('绩效工资', sal.perfSalary, fmtMoney(sal.perfSalary) + ` = ${fmtMoney(sal.perfBase)} × ${sal.perfScore}`)}
+          ${this.salItem('绩效工资', sal.perfSalary, fmtMoney(sal.perfSalary) + ` = ${fmtMoney(sal.perfBase)} × ${sal.perfScore}%`)}
           ${this.salItem('全勤奖', sal.fullAttendBonus, sal.fullAttendBonus>0?`${fmtMoney(sal.fullAttendBonus)} ✅`:`${fmtMoney(0)} ❌`)}
           ${this.salItem('绩效津贴', sal.perfAllowance, sal.perfAllowance>0?`${fmtMoney(sal.perfAllowance)} (初中部)`:`${fmtMoney(0)}`)}
           ${this.salItem('课时费', sal.courseFee, fmtMoney(sal.courseFee) + ` (分成${t.shareRate||DB.get().settings.defaultShareRate}%)`)}
           ${this.salItem('岗位补助', sal.postBonus, sal.postBonus>0?`${fmtMoney(sal.postBonus)} (管理岗)`:`${fmtMoney(0)}`)}
           ${this.salItem('交通补贴', sal.transportBonus, sal.transportBonus>0?`${fmtMoney(sal.transportBonus)} (晚辅)`:`${fmtMoney(0)}`)}
-          ${this.salItem('社保扣除', sal.socialInsurance, sal.socialInsurance>0?`-${fmtMoney(sal.socialInsurance)}`:`${fmtMoney(0)}`)}
+          ${this.salItem('社保', sal.socialType, sal.socialType==='pay'
+            ? `-${fmtMoney(sal.socialDeduction)} (扣除)`
+            : `${sal.socialSubsidy>0?'+'+fmtMoney(sal.socialSubsidy):''} ${sal.socialSubsidy>0?'(补贴)':'(无)'}`)}
         </div>
       </div>
 
@@ -1466,8 +1482,9 @@ const App = {
             <input class="form-input" type="number" id="se_actual" value="${rec.actualDays ?? 22}">
           </div>
           <div class="form-group">
-            <label class="form-label">绩效得分 (0-100)</label>
-            <input class="form-input" type="number" id="se_perf" value="${rec.perfScore ?? 80}" step="0.1">
+            <label class="form-label">绩效得分 (0-100%)</label>
+            <input class="form-input" type="number" id="se_perf" value="${rec.perfScore ?? 80}" step="0.1" min="0" max="100">
+            <div class="form-hint">如 80 表示 80%, 绩效工资 = 绩效基数 × 得分%</div>
           </div>
         </div>
         <div class="form-row-3">
@@ -1500,8 +1517,15 @@ const App = {
             </select>
           </div>
           <div class="form-group">
-            <label class="form-label">社保扣除 (元)</label>
-            <input class="form-input" type="number" id="se_social" value="${rec.socialInsurance ?? t.socialInsurance ?? 0}">
+            <label class="form-label">社保</label>
+            <select class="form-select" id="se_social_type" onchange="App.toggleSocialType()">
+              <option value="none" ${(!rec.socialType || rec.socialType==='none')?'selected':''}>不缴纳（发放社保补贴）</option>
+              <option value="pay" ${rec.socialType==='pay'?'selected':''}>缴纳（扣除个人部分）</option>
+            </select>
+            <div id="se_social_amount_wrap" style="margin-top:8px">
+              <label class="form-label" id="se_social_label">${rec.socialType==='pay'?'社保扣除金额 (元)':'社保补贴金额 (元)'}</label>
+              <input class="form-input" type="number" id="se_social" value="${rec.socialInsurance ?? t.socialInsurance ?? 0}">
+            </div>
           </div>
         </div>
         <div class="form-group">
@@ -1522,6 +1546,7 @@ const App = {
     if (!t) return;
     const monthKey = this.state.currentMonth;
     if (!t.salaryRecords) t.salaryRecords = {};
+    const socialType = $('#se_social_type').value;
     t.salaryRecords[monthKey] = {
       shouldDays: Number($('#se_should').value)||0,
       actualDays: Number($('#se_actual').value)||0,
@@ -1530,6 +1555,7 @@ const App = {
       perfAllowance: Number($('#se_perfallow').value)||0,
       postBonus: Number($('#se_post').value)||0,
       transportBonus: Number($('#se_transport').value)||0,
+      socialType,
       socialInsurance: Number($('#se_social').value)||0,
       note: $('#se_note').value.trim(),
     };
@@ -1537,6 +1563,12 @@ const App = {
     this.closeModal();
     toast('工资参数已更新');
     this.renderTeacherDetail();
+  },
+
+  toggleSocialType() {
+    const type = $('#se_social_type').value;
+    const label = $('#se_social_label');
+    if (label) label.textContent = type === 'pay' ? '社保扣除金额 (元)' : '社保补贴金额 (元)';
   },
 
   /* ====================================================================
@@ -1580,17 +1612,23 @@ const App = {
     // 交通补贴 (晚辅期间)
     const transportBonus = rec.transportBonus || 0;
 
-    // 社保 (自定义, 不交为0)
-    const socialInsurance = rec.socialInsurance ?? t.socialInsurance ?? 0;
+    // 社保: 缴纳=扣除个人部分; 不缴纳=发放社保补贴(加到工资)
+    const socialType = rec.socialType || (t.socialInsurance > 0 ? 'pay' : 'none');
+    const socialAmount = rec.socialInsurance ?? t.socialInsurance ?? 0;
+    // socialType='pay' → 扣除; socialType='none' → 补贴(加入)
+    const socialDeduction = socialType === 'pay' ? socialAmount : 0;
+    const socialSubsidy = socialType === 'none' ? socialAmount : 0;
 
     const total = baseSalary + perfSalary + fullAttendBonus + perfAllowance
-      + courseFee + postBonus + transportBonus - socialInsurance;
+      + courseFee + postBonus + transportBonus + socialSubsidy - socialDeduction;
 
     return {
       shouldDays, actualDays, perfScore,
       baseSalary, perfBase, perfSalary,
       fullAttendBonus, perfAllowance, courseFee,
-      postBonus, transportBonus, socialInsurance,
+      postBonus, transportBonus,
+      socialType, socialAmount, socialDeduction, socialSubsidy,
+      socialInsurance: socialDeduction, // 兼容旧字段
       total: Math.round(total * 100) / 100,
     };
   },
@@ -1646,13 +1684,17 @@ const App = {
                 <tr>
                   <td><strong>${t.name}</strong><br><span style="font-size:11px;color:var(--text-light)">${t.dept} · ${t.level||''}</span></td>
                   <td>${fmtMoney(sal.baseSalary)}</td>
-                  <td>${fmtMoney(sal.perfSalary)}<br><span style="font-size:10px;color:var(--text-light)">${sal.perfBase}×${sal.perfScore}</span></td>
+                  <td>${fmtMoney(sal.perfSalary)}<br><span style="font-size:10px;color:var(--text-light)">${sal.perfBase}×${sal.perfScore}%</span></td>
                   <td>${sal.fullAttendBonus>0?`<span style="color:var(--success)">${fmtMoney(sal.fullAttendBonus)}</span>`:'-'}</td>
                   <td>${sal.perfAllowance>0?fmtMoney(sal.perfAllowance):'-'}</td>
                   <td>${sal.courseFee>0?fmtMoney(sal.courseFee):'-'}</td>
                   <td>${sal.postBonus>0?fmtMoney(sal.postBonus):'-'}</td>
                   <td>${sal.transportBonus>0?fmtMoney(sal.transportBonus):'-'}</td>
-                  <td>${sal.socialInsurance>0?`<span style="color:var(--danger)">-${fmtMoney(sal.socialInsurance)}</span>`:'-'}</td>
+                  <td>${sal.socialType==='pay'
+                    ? `<span style="color:var(--danger)">-${fmtMoney(sal.socialDeduction)}</span>`
+                    : (sal.socialSubsidy>0
+                      ? `<span style="color:var(--success)">+${fmtMoney(sal.socialSubsidy)}</span>`
+                      : '-')}</td>
                   <td><strong style="color:var(--primary);font-size:15px">${fmtMoney(sal.total)}</strong></td>
                   <td>
                     <button class="btn btn-ghost btn-sm" onclick="App.openSalaryEdit('${t.id}')">调整</button>
@@ -2780,7 +2822,7 @@ ON CONFLICT (id) DO NOTHING;`;
 
     if (type === 'salary' || type === 'all') {
       const month = this.state.currentMonth;
-      const rows = [['教师','部门','职级','基本工资','绩效基数','绩效得分','绩效工资','应出勤','实际出勤','全勤奖','绩效津贴','课时费','岗位补助','交通补贴','社保扣除','实发工资','月份']];
+      const rows = [['教师','部门','职级','基本工资','绩效基数','绩效得分(%)','绩效工资','应出勤','实际出勤','全勤奖','绩效津贴','课时费','岗位补助','交通补贴','社保类型','社保金额','实发工资','月份']];
       d.teachers.forEach(t => {
         const sal = this.calcTeacherSalary(t, month);
         rows.push([
@@ -2788,7 +2830,9 @@ ON CONFLICT (id) DO NOTHING;`;
           sal.baseSalary, sal.perfBase, sal.perfScore, sal.perfSalary,
           sal.shouldDays, sal.actualDays, sal.fullAttendBonus,
           sal.perfAllowance, sal.courseFee, sal.postBonus, sal.transportBonus,
-          sal.socialInsurance, sal.total, month
+          sal.socialType==='pay'?'缴纳扣除':'不缴纳补贴',
+          sal.socialType==='pay'?sal.socialDeduction:sal.socialSubsidy,
+          sal.total, month
         ]);
       });
       // 合计行
