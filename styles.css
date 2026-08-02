@@ -1161,6 +1161,20 @@ tbody tr:last-child td {
   font-weight: 600;
 }
 
+.absent-day-cell.present {
+  background: #e6f4ea;
+  border-color: var(--success);
+}
+
+.absent-day-cell.present .day-num {
+  color: var(--success);
+}
+
+.absent-day-cell.present .day-status {
+  color: var(--success);
+  font-weight: 600;
+}
+
 @media (max-width: 768px) {
   .absent-calendar {
     grid-template-columns: repeat(7, 1fr);

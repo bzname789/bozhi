@@ -223,6 +223,7 @@ const App = {
     search: '',
     filterType: '',
     filterDept: '',
+    attendanceTab: 'teacher',
   },
 
   init() {
@@ -740,7 +741,16 @@ const App = {
                   return f ? `<span class="tag ${f.cls}">${f.label}</span>` : '';
                 }).join('')}</td>
                 <td>${teacherNames.length ? teacherNames.map(n=>`<span class="tag tag-blue">${n}</span>`).join(' ') : '-'}</td>
-                <td>${(s.enrollTypes||[]).includes('private') ? `<span class="hour-badge">${s.remainHours||0} 课时</span>` : '—'}</td>
+                <td>${(s.enrollTypes||[]).includes('private') ? (() => {
+                  const ths = s.teacherHours || [];
+                  if (ths.length) {
+                    return ths.map(th => {
+                      const t = DB.get().teachers.find(x=>x.id===th.teacherId);
+                      return `<span class="hour-badge">${t?t.name:'?'}: ${th.hours||0}</span>`;
+                    }).join(' ');
+                  }
+                  return `<span class="hour-badge">${s.remainHours||0} 课时</span>`;
+                })() : '—'}</td>
                 <td>${s.phone||'-'}</td>
                 <td class="action-cell">
                   <button class="btn btn-ghost btn-sm" onclick="App.openStudentDetail('${s.id}')">详情</button>
@@ -762,9 +772,12 @@ const App = {
       name:'', grade:'', phone:'', school:'', enrollTypes:[],
       projectFees: {}, remainHours:0, notes:'', guardian:'', addr:'',
       teacherBindings: [],   // [{teacherId, subject, enrollType}]
+      gradeTeachers: [],     // [{teacherId}] 晚辅导/暑期班按年级绑定的固定老师
     };
     const projectFees = data.projectFees || {};
     const bindings = data.teacherBindings || [];
+    const teacherHours = data.teacherHours || [];
+    const gradeTeachers = data.gradeTeachers || [];
 
     // 构建教师选项
     const d = DB.get();
@@ -809,6 +822,20 @@ const App = {
         </div>
       `;
     }).join('') : '<div style="font-size:12px;color:var(--text-light);padding:8px 0">暂未绑定教师</div>';
+
+    // 小课课时按老师分配
+    const teacherHourRows = teacherHours.length ? teacherHours.map((th, i) => {
+      const t = d.teachers.find(x=>x.id===th.teacherId);
+      const tName = t ? t.name : '已删除';
+      return `
+        <div class="th-row" style="display:flex;align-items:center;gap:8px;padding:8px;background:white;border-radius:6px;margin-bottom:6px;border:1px solid var(--border)">
+          <span style="flex:1;font-size:12px"><strong>${tName}</strong></span>
+          <input class="form-input th-hours-input" type="number" value="${th.hours||0}" min="0" style="width:80px;text-align:center" data-th-teacher="${th.teacherId}">
+          <span style="font-size:11px;color:var(--text-light)">课时</span>
+          <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="this.closest('.th-row').remove()">✕</button>
+        </div>
+      `;
+    }).join('') : '<div style="font-size:12px;color:var(--text-light);padding:8px 0" id="thEmpty">暂未分配课时，请在下方选择老师并分配</div>';
 
     this.openModal(`
       <div class="modal-header">
@@ -864,14 +891,24 @@ const App = {
         <div id="feeSections">${feeInputs}</div>
 
         ${(data.enrollTypes||[]).includes('private') ? `
-          <div class="form-group">
-            <label class="form-label">小课总课时</label>
-            <input class="form-input" type="number" id="sf_hours" value="${data.remainHours||0}" placeholder="购买的总课时数">
-          </div>
+          <hr class="divider">
+          <div style="font-weight:600;font-size:13px;margin-bottom:10px">📚 小课课时按老师分配 <span class="hint">一个学生的课时可拆分给不同老师</span></div>
+          ${d.teachers.length ? `
+            <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+              <select class="form-select" id="sf_th_teacher" style="flex:1;min-width:140px">
+                <option value="">选择教师</option>
+                ${teacherOpts}
+              </select>
+              <input class="form-input" type="number" id="sf_th_hours" value="0" min="0" placeholder="课时数" style="width:100px">
+              <button class="btn btn-primary btn-sm" onclick="App.addTeacherHours()">+ 分配</button>
+            </div>
+          ` : '<div style="color:var(--text-light);font-size:12px;margin-bottom:10px">暂无教师，请先添加教师</div>'}
+          <div id="thList">${teacherHourRows}</div>
+          <div id="thTotalInfo" style="margin-top:8px;padding:8px;background:var(--primary-light);border-radius:6px;font-size:12px"></div>
         ` : ''}
 
         <hr class="divider">
-        <div style="font-weight:600;font-size:13px;margin-bottom:10px">🧑‍🏫 绑定任课教师 <span class="hint">一个学生可绑定多位教师</span></div>
+        <div style="font-weight:600;font-size:13px;margin-bottom:10px">🧑‍🏫 绑定任课教师 <span class="hint">一个学生可绑定多位教师（小课消课用）</span></div>
         ${d.teachers.length ? `
           <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
             <select class="form-select" id="sf_bind_teacher" style="flex:1;min-width:140px">
@@ -886,6 +923,29 @@ const App = {
           </div>
         ` : '<div style="color:var(--text-light);font-size:12px;margin-bottom:10px">暂无教师，请先添加教师后再绑定</div>'}
         <div id="bindingList">${bindingRows}</div>
+
+        <hr class="divider">
+        <div style="font-weight:600;font-size:13px;margin-bottom:10px">📅 年级固定老师 <span class="hint">晚辅导/暑期班按年级绑定的老师（可多个），负责标记缺勤</span></div>
+        ${d.teachers.length ? `
+          <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+            <select class="form-select" id="sf_gt_teacher" style="flex:1;min-width:140px">
+              <option value="">选择教师</option>
+              ${teacherOpts}
+            </select>
+            <button class="btn btn-primary btn-sm" onclick="App.addGradeTeacher()">+ 绑定</button>
+          </div>
+        ` : '<div style="color:var(--text-light);font-size:12px;margin-bottom:10px">暂无教师</div>'}
+        <div id="gtList">${gradeTeachers.length ? gradeTeachers.map(gt => {
+          const t = d.teachers.find(x=>x.id===gt.teacherId);
+          const tName = t ? t.name : '已删除';
+          return `
+            <div class="gt-row" style="display:flex;align-items:center;gap:8px;padding:8px;background:white;border-radius:6px;margin-bottom:6px;border:1px solid var(--border)">
+              <span style="flex:1;font-size:12px"><strong>${tName}</strong>${t ? ' · '+(t.subject||'') : ''}</span>
+              <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="this.closest('.gt-row').remove()">✕</button>
+              <input type="hidden" class="gt-data" value="${gt.teacherId}">
+            </div>
+          `;
+        }).join('') : '<div style="font-size:12px;color:var(--text-light);padding:8px 0" id="gtEmpty">暂未绑定年级老师</div>'}</div>
 
         <div class="form-group">
           <label class="form-label">备注</label>
@@ -912,6 +972,9 @@ const App = {
       const checked = $('#sf_types .multi-check-item[data-key="'+key+'"]')?.classList.contains('checked');
       el.style.display = checked ? '' : 'none';
     });
+
+    // 初始化课时分配总计
+    this.updateThTotal();
   },
 
   toggleFeeSection(el) {
@@ -946,6 +1009,88 @@ const App = {
     toast('已绑定');
   },
 
+  addTeacherHours() {
+    const tid = $('#sf_th_teacher')?.value;
+    const hours = Number($('#sf_th_hours')?.value)||0;
+    if (!tid) { toast('请选择教师', 'warning'); return; }
+    if (hours <= 0) { toast('请填写正确的课时数', 'warning'); return; }
+    // 检查是否已存在
+    const existing = $(`#thList .th-hours-input[data-th-teacher="${tid}"]`);
+    if (existing) {
+      existing.value = Number(existing.value) + hours;
+      toast('已累加到该教师');
+      this.updateThTotal();
+      return;
+    }
+    const d = DB.get();
+    const t = d.teachers.find(x=>x.id===tid);
+    if (!t) return;
+    const row = document.createElement('div');
+    row.className = 'th-row';
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px;background:white;border-radius:6px;margin-bottom:6px;border:1px solid var(--border)';
+    row.innerHTML = `
+      <span style="flex:1;font-size:12px"><strong>${t.name}</strong></span>
+      <input class="form-input th-hours-input" type="number" value="${hours}" min="0" style="width:80px;text-align:center" data-th-teacher="${tid}" oninput="App.updateThTotal()">
+      <span style="font-size:11px;color:var(--text-light)">课时</span>
+      <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="this.closest('.th-row').remove(); App.updateThTotal()">✕</button>
+    `;
+    const list = $('#thList');
+    if (list) {
+      const empty = $('#thEmpty');
+      if (empty) empty.remove();
+      list.appendChild(row);
+    }
+    $('#sf_th_hours').value = '0';
+    this.updateThTotal();
+    toast('已分配');
+  },
+
+  updateThTotal() {
+    let total = 0;
+    $$('#thList .th-hours-input').forEach(el => {
+      total += Number(el.value)||0;
+    });
+    const el = $('#thTotalInfo');
+    if (el) el.innerHTML = `📊 合计分配课时: <strong style="color:var(--primary)">${total}</strong> 课时`;
+  },
+
+  addGradeTeacher() {
+    const tid = $('#sf_gt_teacher')?.value;
+    if (!tid) { toast('请选择教师', 'warning'); return; }
+    // 检查是否已存在
+    const existing = $$('#gtList .gt-data').find(el => el.value === tid);
+    if (existing) { toast('该教师已绑定', 'warning'); return; }
+    const d = DB.get();
+    const t = d.teachers.find(x=>x.id===tid);
+    if (!t) return;
+    const row = document.createElement('div');
+    row.className = 'gt-row';
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px;background:white;border-radius:6px;margin-bottom:6px;border:1px solid var(--border)';
+    row.innerHTML = `
+      <span style="flex:1;font-size:12px"><strong>${t.name}</strong> · ${t.subject||'未设科目'}</span>
+      <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="this.closest('.gt-row').remove()">✕</button>
+      <input type="hidden" class="gt-data" value="${tid}">
+    `;
+    const list = $('#gtList');
+    if (list) {
+      const empty = $('#gtEmpty');
+      if (empty) empty.remove();
+      list.appendChild(row);
+    }
+    $('#sf_gt_teacher').value = '';
+    toast('已绑定年级老师');
+  },
+
+  // 获取学生某老师的剩余课时 (从 teacherHours 中查找)
+  getTeacherHours(student, teacherId) {
+    if (!student || !teacherId) return 0;
+    const ths = student.teacherHours || [];
+    const found = ths.find(th => th.teacherId === teacherId);
+    if (found) return found.hours || 0;
+    // 兼容旧数据: 没有 teacherHours 时用 remainHours
+    return student.remainHours || 0;
+  },
+
   saveStudent() {
     const name = $('#sf_name').value.trim();
     if (!name) { toast('请填写姓名', 'error'); return; }
@@ -968,6 +1113,24 @@ const App = {
       if (parts[0]) bindings.push({ teacherId: parts[0], subject: parts[1], enrollType: parts[2] });
     });
 
+    // 收集小课课时按老师分配
+    const teacherHours = [];
+    let totalHours = 0;
+    $$('#thList .th-hours-input').forEach(el => {
+      const tid = el.dataset.thTeacher;
+      const hrs = Number(el.value)||0;
+      if (tid && hrs > 0) {
+        teacherHours.push({ teacherId: tid, hours: hrs });
+        totalHours += hrs;
+      }
+    });
+
+    // 收集年级固定老师
+    const gradeTeachers = [];
+    $$('#gtList .gt-data').forEach(el => {
+      if (el.value) gradeTeachers.push({ teacherId: el.value });
+    });
+
     const obj = {
       name,
       grade: $('#sf_grade').value,
@@ -978,7 +1141,9 @@ const App = {
       enrollTypes,
       projectFees,
       teacherBindings: bindings,
-      remainHours: Number($('#sf_hours')?.value)||0,
+      teacherHours,
+      gradeTeachers,
+      remainHours: totalHours,
       notes: $('#sf_notes').value.trim(),
     };
 
@@ -986,7 +1151,13 @@ const App = {
     const id = this.state.editingStudentId;
     if (id) {
       const idx = d.students.findIndex(x=>x.id===id);
-      if (idx>-1) d.students[idx] = {...d.students[idx], ...obj};
+      if (idx>-1) {
+        // 编辑时: 如果没有 teacherHours, 保留旧的 remainHours
+        if (!teacherHours.length && d.students[idx].remainHours) {
+          obj.remainHours = d.students[idx].remainHours;
+        }
+        d.students[idx] = {...d.students[idx], ...obj};
+      }
     } else {
       obj.id = uid();
       obj.createdAt = new Date().toISOString();
@@ -1034,6 +1205,28 @@ const App = {
           ${ (s.enrollTypes||[]).includes('private') ? `
             <div class="info-item"><span class="info-label">总课时</span><span class="info-value">${s.totalHours||0}</span></div>
             <div class="info-item"><span class="info-label">剩余课时</span><span class="info-value"><span class="hour-badge">${s.remainHours||0}</span></span></div>
+            ${(s.teacherHours||[]).length ? `
+              <div class="info-item" style="flex-direction:column;align-items:flex-start">
+                <span class="info-label">按老师分配</span>
+                <span class="info-value" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px">
+                  ${s.teacherHours.map(th => {
+                    const t = d.teachers.find(x=>x.id===th.teacherId);
+                    return `<span class="tag tag-purple">${t?t.name:'已删除'}: ${th.hours||0}</span>`;
+                  }).join('')}
+                </span>
+              </div>
+            ` : ''}
+          ` : ''}
+          ${(s.gradeTeachers||[]).length ? `
+            <div class="info-item" style="flex-direction:column;align-items:flex-start">
+              <span class="info-label">年级固定老师</span>
+              <span class="info-value" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px">
+                ${s.gradeTeachers.map(gt => {
+                  const t = d.teachers.find(x=>x.id===gt.teacherId);
+                  return `<span class="tag tag-cyan">${t?t.name:'已删除'}</span>`;
+                }).join('')}
+              </span>
+            </div>
           ` : ''}
         </div>
 
@@ -1773,6 +1966,7 @@ const App = {
     const month = this.state.currentMonth;
     const [y, m] = month.split('-').map(Number);
     const daysInMonth = new Date(y, m, 0).getDate();
+    const tab = this.state.attendanceTab || 'teacher';
 
     const getAttendance = (t) => {
       const rec = t.salaryRecords?.[month] || {};
@@ -1790,6 +1984,45 @@ const App = {
       return { shouldDays, absentCount, actualDays, absentLabels, hasAbsent: Object.keys(absentRecords).length > 0 };
     };
 
+    // 晚辅导/暑期班学生 (默认出勤, 标记缺勤)
+    const eveningSummerStudents = d.students.filter(s =>
+      (s.enrollTypes||[]).some(t => t === 'evening' || t === 'summer')
+    );
+
+    // 周末托学生 (默认缺勤, 标记出勤)
+    const weekendStudents = d.students.filter(s =>
+      (s.enrollTypes||[]).includes('weekend')
+    );
+
+    // 获取学生考勤记录
+    const getStudentAttendance = (s, type) => {
+      // type: 'evening_summer' | 'weekend'
+      const records = s.attendanceRecords?.[month]?.[type] || {};
+      return records;
+    };
+
+    // 统计学生考勤
+    const countStudentAtt = (s, type, defaultPresent) => {
+      const records = getStudentAttendance(s, type);
+      const marked = Object.keys(records).length;
+      if (defaultPresent) {
+        // 晚辅导/暑期班: 默认出勤, 标记的是缺勤
+        const absent = Object.values(records).filter(v => v === 'absent').length;
+        const halfAbsent = Object.values(records).filter(v => v === 'half').length;
+        return { absent, halfAbsent, marked, present: daysInMonth - absent - halfAbsent };
+      } else {
+        // 周末托: 默认缺勤, 标记的是出勤
+        const present = Object.values(records).filter(v => v === 'present').length;
+        return { present, absent: daysInMonth - present, marked };
+      }
+    };
+
+    const tabBtn = (key, label, icon) => `
+      <button class="btn ${tab===key?'btn-primary':'btn-secondary'} btn-sm" onclick="App.state.attendanceTab='${key}'; App.render()">
+        ${icon} ${label}
+      </button>
+    `;
+
     return `
       <div class="card">
         <div class="card-header">
@@ -1801,48 +2034,138 @@ const App = {
           </div>
         </div>
 
-        <div class="highlight-box">
-          📅 ${month} 共 ${daysInMonth} 天 | 点击日期循环切换：出勤 → 半天缺勤 → 全天缺勤 → 出勤<br>
-          实际出勤 = 应出勤 - 缺勤天数（半天算 0.5 天）
+        <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+          ${tabBtn('teacher','教师考勤','🧑‍🏫')}
+          ${tabBtn('evening_summer','晚辅导/暑期班','📚')}
+          ${tabBtn('weekend','周末托','📅')}
         </div>
 
-        ${teachers.length ? `
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>教师</th>
-                  <th>类型</th>
-                  <th>应出勤</th>
-                  <th>缺勤天数</th>
-                  <th>实际出勤</th>
-                  <th>缺勤日期</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${teachers.map(t => {
-                  const att = getAttendance(t);
-                  const typeTag = (t.jobType||'full')==='full'?'<span class="tag tag-green">全职</span>'
-                    :(t.jobType==='hourly'?'<span class="tag tag-cyan">时薪</span>':'<span class="tag tag-gray">兼职</span>');
-                  return `<tr>
-                    <td><strong>${t.name}</strong></td>
-                    <td>${typeTag}</td>
-                    <td>
-                      <input type="number" class="salary-item-input" style="width:60px;text-align:center" value="${att.shouldDays}" min="0" max="${daysInMonth}" onchange="App.setShouldDays('${t.id}', this.value)">
-                    </td>
-                    <td><strong style="color:${att.absentCount>0?'var(--danger)':'var(--success)'}">${att.absentCount}</strong></td>
-                    <td><strong>${att.actualDays}</strong></td>
-                    <td>${att.hasAbsent ? att.absentLabels.join(' ') : '<span style="color:var(--text-light)">无缺勤</span>'}</td>
-                    <td>
-                      <button class="btn btn-ghost btn-sm" onclick="App.openAbsentModal('${t.id}')">${att.hasAbsent?'编辑缺勤':'标记缺勤'}</button>
-                    </td>
-                  </tr>`;
-                }).join('')}
-              </tbody>
-            </table>
+        ${tab === 'teacher' ? `
+          <div class="highlight-box">
+            📅 ${month} 共 ${daysInMonth} 天 | 点击日期循环切换：出勤 → 半天缺勤 → 全天缺勤 → 出勤<br>
+            实际出勤 = 应出勤 - 缺勤天数（半天算 0.5 天）
           </div>
-        ` : `<div class="empty-state"><div class="empty-state-icon">📅</div><div class="empty-state-text">暂无教师，请先添加教师</div></div>`}
+
+          ${teachers.length ? `
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>教师</th>
+                    <th>类型</th>
+                    <th>应出勤</th>
+                    <th>缺勤天数</th>
+                    <th>实际出勤</th>
+                    <th>缺勤日期</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${teachers.map(t => {
+                    const att = getAttendance(t);
+                    const typeTag = (t.jobType||'full')==='full'?'<span class="tag tag-green">全职</span>'
+                      :(t.jobType==='hourly'?'<span class="tag tag-cyan">时薪</span>':'<span class="tag tag-gray">兼职</span>');
+                    return `<tr>
+                      <td><strong>${t.name}</strong></td>
+                      <td>${typeTag}</td>
+                      <td>
+                        <input type="number" class="salary-item-input" style="width:60px;text-align:center" value="${att.shouldDays}" min="0" max="${daysInMonth}" onchange="App.setShouldDays('${t.id}', this.value)">
+                      </td>
+                      <td><strong style="color:${att.absentCount>0?'var(--danger)':'var(--success)'}">${att.absentCount}</strong></td>
+                      <td><strong>${att.actualDays}</strong></td>
+                      <td>${att.hasAbsent ? att.absentLabels.join(' ') : '<span style="color:var(--text-light)">无缺勤</span>'}</td>
+                      <td>
+                        <button class="btn btn-ghost btn-sm" onclick="App.openAbsentModal('${t.id}')">${att.hasAbsent?'编辑缺勤':'标记缺勤'}</button>
+                      </td>
+                    </tr>`;
+                  }).join('')}
+                </tbody>
+              </table>
+            </div>
+          ` : `<div class="empty-state"><div class="empty-state-icon">📅</div><div class="empty-state-text">暂无教师，请先添加教师</div></div>`}
+        ` : ''}
+
+        ${tab === 'evening_summer' ? `
+          <div class="highlight-box">
+            📚 <strong>晚辅导/暑期班考勤</strong> — 默认所有学生出勤，由年级固定老师标记缺勤<br>
+            点击日期循环切换：出勤 → 半天缺勤 → 全天缺勤 → 出勤
+          </div>
+          ${eveningSummerStudents.length ? `
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>学生</th>
+                    <th>年级</th>
+                    <th>年级老师</th>
+                    <th>出勤</th>
+                    <th>缺勤</th>
+                    <th>半天缺</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${eveningSummerStudents.map(s => {
+                    const att = countStudentAtt(s, 'evening_summer', true);
+                    const gts = (s.gradeTeachers||[]).map(gt => {
+                      const t = d.teachers.find(x=>x.id===gt.teacherId);
+                      return t ? t.name : null;
+                    }).filter(Boolean);
+                    const types = (s.enrollTypes||[]).filter(t => t === 'evening' || t === 'summer')
+                      .map(t => `<span class="tag ${ENROLL_TYPES.find(x=>x.key===t)?.cls}">${ENROLL_TYPES.find(x=>x.key===t)?.label}</span>`).join(' ');
+                    return `<tr>
+                      <td><strong>${s.name}</strong></td>
+                      <td>${s.grade||'-'} ${types}</td>
+                      <td>${gts.length ? gts.map(n=>`<span class="tag tag-cyan">${n}</span>`).join(' ') : '<span style="color:var(--danger)">未绑定</span>'}</td>
+                      <td><strong style="color:var(--success)">${att.present}</strong></td>
+                      <td><strong style="color:${att.absent>0?'var(--danger)':'var(--text-light)'}">${att.absent}</strong></td>
+                      <td><strong style="color:${att.halfAbsent>0?'var(--accent)':'var(--text-light)'}">${att.halfAbsent||0}</strong></td>
+                      <td>
+                        <button class="btn btn-ghost btn-sm" onclick="App.openStudentAbsentModal('${s.id}', 'evening_summer')">${att.marked>0?'编辑':'标记缺勤'}</button>
+                      </td>
+                    </tr>`;
+                  }).join('')}
+                </tbody>
+              </table>
+            </div>
+          ` : `<div class="empty-state"><div class="empty-state-icon">📚</div><div class="empty-state-text">暂无晚辅导/暑期班学生</div></div>`}
+        ` : ''}
+
+        ${tab === 'weekend' ? `
+          <div class="highlight-box">
+            📅 <strong>周末托考勤</strong> — 默认所有学生缺勤，由任意老师标记出勤<br>
+            点击日期循环切换：缺勤 → 出勤 → 缺勤
+          </div>
+          ${weekendStudents.length ? `
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>学生</th>
+                    <th>年级</th>
+                    <th>已标记出勤</th>
+                    <th>缺勤</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${weekendStudents.map(s => {
+                    const att = countStudentAtt(s, 'weekend', false);
+                    return `<tr>
+                      <td><strong>${s.name}</strong> <span class="tag tag-green">周末托</span></td>
+                      <td>${s.grade||'-'}</td>
+                      <td><strong style="color:var(--success)">${att.present}</strong></td>
+                      <td><strong style="color:var(--text-light)">${att.absent}</strong></td>
+                      <td>
+                        <button class="btn btn-ghost btn-sm" onclick="App.openStudentAbsentModal('${s.id}', 'weekend')">${att.marked>0?'编辑':'标记出勤'}</button>
+                      </td>
+                    </tr>`;
+                  }).join('')}
+                </tbody>
+              </table>
+            </div>
+          ` : `<div class="empty-state"><div class="empty-state-icon">📅</div><div class="empty-state-text">暂无周末托学生</div></div>`}
+        ` : ''}
       </div>
     `;
   },
@@ -1977,6 +2300,163 @@ const App = {
     this.render();
   },
 
+  /* ---- 学生考勤 (晚辅导/暑期班 + 周末托) ---- */
+  openStudentAbsentModal(studentId, attType) {
+    const d = DB.get();
+    const s = d.students.find(x=>x.id===studentId);
+    if (!s) return;
+    const month = this.state.currentMonth;
+    const [y, m] = month.split('-').map(Number);
+    const daysInMonth = new Date(y, m, 0).getDate();
+    const isWeekend = attType === 'weekend';
+    const records = s.attendanceRecords?.[month]?.[attType] || {};
+
+    const dayCells = [];
+    for (let day = 1; day <= daysInMonth; day++) {
+      const dateStr = `${month}-${String(day).padStart(2,'0')}`;
+      const weekday = new Date(y, m-1, day).getDay();
+      const isWeekendDay = weekday === 0 || weekday === 6;
+      let status, cls, label;
+      if (isWeekend) {
+        // 周末托: 默认缺勤, 标记出勤
+        status = records[dateStr] || 'absent';
+        if (status === 'present') { cls = 'present'; label = '出'; }
+        else { cls = 'absent'; label = '缺'; }
+      } else {
+        // 晚辅导/暑期班: 默认出勤, 标记缺勤
+        status = records[dateStr] || 'present';
+        if (status === 'absent') { cls = 'absent'; label = '全天缺'; }
+        else if (status === 'half') { cls = 'half-absent'; label = '半天缺'; }
+        else { cls = ''; label = '出'; }
+      }
+      dayCells.push(`
+        <div class="absent-day-cell ${cls} ${isWeekendDay?'weekend':''}" data-date="${dateStr}" data-status="${status}" data-type="${attType}" onclick="App.cycleStudentAbsentDay(this)">
+          <div class="day-num">${day}</div>
+          <div class="day-status">${label}</div>
+        </div>
+      `);
+    }
+
+    const title = isWeekend ? `标记出勤 · ${s.name} (${month})` : `标记缺勤 · ${s.name} (${month})}`;
+    const hint = isWeekend
+      ? '点击日期循环切换：<strong>缺勤 → 出勤 → 缺勤</strong>（周末托默认缺勤，标记出勤）'
+      : '点击日期循环切换：<strong>出勤 → 半天缺 → 全天缺 → 出勤</strong>（晚辅导/暑期班默认出勤）';
+
+    this.openModal(`
+      <div class="modal-header">
+        <div class="modal-title">${title}</div>
+        <button class="modal-close" data-close-modal>×</button>
+      </div>
+      <div class="modal-body">
+        <div class="highlight-box">${hint}</div>
+        <div class="absent-calendar">${dayCells.join('')}</div>
+        <div style="margin-top:12px;display:flex;gap:12px;font-size:12px;flex-wrap:wrap">
+          ${isWeekend ? `
+            <span><span class="dot dot-green"></span>出勤</span>
+            <span><span class="dot dot-red"></span>缺勤（默认）</span>
+          ` : `
+            <span><span class="dot dot-green"></span>出勤（默认）</span>
+            <span><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--accent);margin-right:6px"></span>半天缺勤</span>
+            <span><span class="dot dot-red"></span>全天缺勤</span>
+          `}
+          <span style="color:var(--text-light)">灰色背景=周末</span>
+        </div>
+        <div id="absentSummary" style="margin-top:12px;padding:10px;background:var(--primary-light);border-radius:8px;font-size:13px"></div>
+      </div>
+      <div class="modal-footer">
+        ${isWeekend ? '<button class="btn btn-secondary" onclick="App.clearAllStudentAbsent()">全部缺勤</button>' : '<button class="btn btn-secondary" onclick="App.clearAllStudentAbsent()">全部出勤</button>'}
+        <button class="btn btn-secondary" data-close-modal>取消</button>
+        <button class="btn btn-primary" onclick="App.saveStudentAbsent('${studentId}', '${attType}')">保存</button>
+      </div>
+    `);
+
+    this.updateStudentAbsentSummary(attType);
+  },
+
+  cycleStudentAbsentDay(el) {
+    const cur = el.dataset.status || 'present';
+    const attType = el.dataset.type;
+    let next, cls, label;
+    if (attType === 'weekend') {
+      // 周末托: absent → present → absent
+      if (cur === 'absent') { next = 'present'; cls = 'present'; label = '出'; }
+      else { next = 'absent'; cls = 'absent'; label = '缺'; }
+    } else {
+      // 晚辅导/暑期班: present → half → absent → present
+      if (cur === 'present') { next = 'half'; cls = 'half-absent'; label = '半天缺'; }
+      else if (cur === 'half') { next = 'absent'; cls = 'absent'; label = '全天缺'; }
+      else { next = 'present'; cls = ''; label = '出'; }
+    }
+    el.dataset.status = next;
+    el.className = 'absent-day-cell ' + cls + (el.classList.contains('weekend') ? ' weekend' : '');
+    el.querySelector('.day-status').textContent = label;
+    this.updateStudentAbsentSummary(attType);
+  },
+
+  updateStudentAbsentSummary(attType) {
+    const cells = $$('.absent-day-cell');
+    let present = 0, absent = 0, half = 0;
+    cells.forEach(el => {
+      const s = el.dataset.status;
+      if (s === 'present') present++;
+      else if (s === 'absent') absent++;
+      else if (s === 'half') half++;
+    });
+    const el = $('#absentSummary');
+    if (el) {
+      if (attType === 'weekend') {
+        el.innerHTML = `出勤 <strong style="color:var(--success)">${present}</strong> 天，缺勤 <strong style="color:var(--text-light)">${absent}</strong> 天`;
+      } else {
+        const totalAbsent = absent + half * 0.5;
+        el.innerHTML = `出勤 <strong style="color:var(--success)">${present}</strong> 天，全天缺勤 <strong style="color:var(--danger)">${absent}</strong> 天，半天缺勤 <strong style="color:var(--accent)">${half}</strong> 天，合计缺勤 <strong style="color:var(--danger)">${totalAbsent}</strong> 天`;
+      }
+    }
+  },
+
+  clearAllStudentAbsent() {
+    const attType = $$('.absent-day-cell')[0]?.dataset.type;
+    $$('.absent-day-cell').forEach(el => {
+      if (attType === 'weekend') {
+        el.dataset.status = 'absent';
+        el.classList.remove('present');
+        el.classList.add('absent');
+        el.querySelector('.day-status').textContent = '缺';
+      } else {
+        el.dataset.status = 'present';
+        el.classList.remove('absent', 'half-absent');
+        el.querySelector('.day-status').textContent = '出';
+      }
+    });
+    this.updateStudentAbsentSummary(attType);
+  },
+
+  saveStudentAbsent(studentId, attType) {
+    const d = DB.get();
+    const s = d.students.find(x=>x.id===studentId);
+    if (!s) return;
+    const month = this.state.currentMonth;
+    if (!s.attendanceRecords) s.attendanceRecords = {};
+    if (!s.attendanceRecords[month]) s.attendanceRecords[month] = {};
+    // 收集考勤记录
+    const records = {};
+    $$('.absent-day-cell').forEach(el => {
+      const status = el.dataset.status;
+      const date = el.dataset.date;
+      if (attType === 'weekend') {
+        // 周末托: 只记录出勤的日期
+        if (status === 'present') records[date] = 'present';
+      } else {
+        // 晚辅导/暑期班: 只记录缺勤的日期
+        if (status === 'absent' || status === 'half') records[date] = status;
+      }
+    });
+    s.attendanceRecords[month][attType] = records;
+    DB.persist();
+    this.closeModal();
+    toast(`已保存 ${s.name} 的考勤记录`);
+    this.render();
+  },
+
   /* ====================================================================
    *  视图: 工资结算
    * ================================================================== */
@@ -2092,17 +2572,23 @@ const App = {
           </div>
           ${privateStudents.length ? `
             <div class="consume-quick-grid">
-              ${privateStudents.map(s => `
+              ${privateStudents.map(s => {
+                const ths = s.teacherHours || [];
+                const remainInfo = ths.length
+                  ? ths.map(th => {
+                      const t = d.teachers.find(x=>x.id===th.teacherId);
+                      return `${t?t.name:'?'}:${th.hours||0}`;
+                    }).join(' | ')
+                  : `${s.remainHours||0} 课时`;
+                return `
                 <div class="consume-quick-item">
                   <div class="consume-quick-name">${s.name}</div>
-                  <div class="consume-quick-info">剩余 ${s.remainHours||0} 课时</div>
+                  <div class="consume-quick-info">剩余 ${remainInfo}</div>
                   <div class="consume-quick-actions">
-                    <button class="consume-mini-btn" onclick="App.quickConsume('${s.id}', 1)">-1</button>
-                    <button class="consume-mini-btn" onclick="App.quickConsume('${s.id}', 2)">-2</button>
-                    <button class="consume-mini-btn" onclick="App.openConsumeForm('${s.id}')">自定义</button>
+                    <button class="consume-mini-btn" onclick="App.openConsumeForm('${s.id}')">消课</button>
                   </div>
-                </div>
-              `).join('')}
+                </div>`;
+              }).join('')}
             </div>
           ` : `<div style="text-align:center;padding:12px;color:#5a4500">暂无小课学生，请先在学生管理中添加报名"小课"</div>`}
         </div>
@@ -2135,34 +2621,6 @@ const App = {
     `;
   },
 
-  quickConsume(studentId, hours) {
-    const s = DB.get().students.find(x=>x.id===studentId);
-    if (!s) return;
-    if ((s.remainHours||0) < hours) { toast('剩余课时不足', 'error'); return; }
-    const d = DB.get();
-    // 优先选该学生绑定的第一个教师
-    const bindings = s.teacherBindings || [];
-    const bid = bindings.length ? bindings[0].teacherId : (d.teachers[0]?.id);
-    const t = d.teachers.find(x=>x.id === bid);
-    if (!t) { toast('请先为该学生绑定教师', 'error'); return; }
-    const pf = s.projectFees?.private || {};
-    const unitPrice = pf.unitPrice || 100;
-    const log = {
-      id: uid(),
-      studentId,
-      teacherId: t.id,
-      hours,
-      unitPrice,
-      date: new Date().toISOString(),
-      remainAfter: s.remainHours - hours,
-    };
-    d.hourLogs.push(log);
-    s.remainHours -= hours;
-    DB.persist();
-    toast(`已为 ${s.name} 消课 ${hours} 课时`);
-    this.render();
-  },
-
   openConsumeForm(studentId=null) {
     const d = DB.get();
     const privateStudents = d.students.filter(s => (s.enrollTypes||[]).includes('private'));
@@ -2171,24 +2629,31 @@ const App = {
     const s = studentId ? d.students.find(x=>x.id===studentId) : null;
     const preStudent = s ? s.id : '';
 
-    // 根据学生获取绑定教师列表
+    // 根据学生获取绑定教师列表 (小课绑定 + 有课时分配的老师)
     const getBoundTeachers = (sid) => {
       const stu = d.students.find(x=>x.id===sid);
-      const bindings = (stu?.teacherBindings || []).filter(b => b.enrollType === 'private' || !b.enrollType);
+      if (!stu) return [];
+      // 优先: teacherHours 中有分配的老师
+      const ths = stu.teacherHours || [];
+      if (ths.length) {
+        return ths.map(th => {
+          const t = d.teachers.find(x=>x.id===th.teacherId);
+          return t ? { id: t.id, name: t.name, rate: t.shareRate || d.settings.defaultShareRate, hours: th.hours } : null;
+        }).filter(Boolean);
+      }
+      // 兼容旧数据: 没有 teacherHours, 用绑定的小课老师
+      const bindings = (stu.teacherBindings || []).filter(b => b.enrollType === 'private' || !b.enrollType);
       if (bindings.length) {
         return bindings.map(b => {
           const t = d.teachers.find(x=>x.id===b.teacherId);
-          return t ? { id: t.id, name: t.name, rate: t.shareRate || DB.get().settings.defaultShareRate } : null;
+          return t ? { id: t.id, name: t.name, rate: t.shareRate || d.settings.defaultShareRate, hours: stu.remainHours||0 } : null;
         }).filter(Boolean);
       }
-      // 如果没有专门绑定小课教师，用该学生的全部绑定教师
-      const all = (stu?.teacherBindings || []).map(b => {
+      const all = (stu.teacherBindings || []).map(b => {
         const t = d.teachers.find(x=>x.id===b.teacherId);
-        return t ? { id: t.id, name: t.name, rate: t.shareRate || DB.get().settings.defaultShareRate } : null;
+        return t ? { id: t.id, name: t.name, rate: t.shareRate || d.settings.defaultShareRate, hours: stu.remainHours||0 } : null;
       }).filter(Boolean);
-      if (all.length) return all;
-      // 还是没有就用全部教师兜底
-      return d.teachers.map(t => ({ id: t.id, name: t.name, rate: t.shareRate || DB.get().settings.defaultShareRate }));
+      return all.length ? all : d.teachers.map(t => ({ id: t.id, name: t.name, rate: t.shareRate || d.settings.defaultShareRate, hours: stu.remainHours||0 }));
     };
 
     // 初始教师列表
@@ -2196,6 +2661,7 @@ const App = {
     const preTeacher = initTeachers.length ? initTeachers[0].id : (d.teachers[0]?.id || '');
 
     const pf = s?.projectFees?.private || {};
+    const initHours = initTeachers.length ? initTeachers[0].hours : 0;
 
     this.openModal(`
       <div class="modal-header">
@@ -2213,7 +2679,7 @@ const App = {
           <div class="form-group">
             <label class="form-label">授课教师<span class="required">*</span></label>
             <select class="form-select" id="cf_teacher" onchange="App.updateConsumeRemaining()">
-              ${initTeachers.map(t=>`<option value="${t.id}" ${preTeacher===t.id?'selected':''}>${t.name} (${t.rate}%)</option>`).join('')}
+              ${initTeachers.map(t=>`<option value="${t.id}" ${preTeacher===t.id?'selected':''}>${t.name} (${t.rate}%) 剩${t.hours}</option>`).join('')}
             </select>
           </div>
         </div>
@@ -2255,24 +2721,33 @@ const App = {
     if (!sid) return;
     const d = DB.get();
     const s = d.students.find(x=>x.id===sid);
-    const bindings = (s?.teacherBindings || []).filter(b => b.enrollType === 'private' || !b.enrollType);
+    if (!s) return;
+    // 获取该学生的老师+课时分配
+    const ths = s.teacherHours || [];
     let teachers;
-    if (bindings.length) {
-      teachers = bindings.map(b => {
-        const t = d.teachers.find(x=>x.id===b.teacherId);
-        return t ? { id: t.id, name: t.name, rate: t.shareRate || DB.get().settings.defaultShareRate } : null;
+    if (ths.length) {
+      teachers = ths.map(th => {
+        const t = d.teachers.find(x=>x.id===th.teacherId);
+        return t ? { id: t.id, name: t.name, rate: t.shareRate || d.settings.defaultShareRate, hours: th.hours } : null;
       }).filter(Boolean);
-    }
-    if (!teachers || !teachers.length) {
-      const all = (s?.teacherBindings || []).map(b => {
-        const t = d.teachers.find(x=>x.id===b.teacherId);
-        return t ? { id: t.id, name: t.name, rate: t.shareRate || DB.get().settings.defaultShareRate } : null;
-      }).filter(Boolean);
-      teachers = all.length ? all : d.teachers.map(t => ({ id: t.id, name: t.name, rate: t.shareRate || DB.get().settings.defaultShareRate }));
+    } else {
+      const bindings = (s.teacherBindings || []).filter(b => b.enrollType === 'private' || !b.enrollType);
+      if (bindings.length) {
+        teachers = bindings.map(b => {
+          const t = d.teachers.find(x=>x.id===b.teacherId);
+          return t ? { id: t.id, name: t.name, rate: t.shareRate || d.settings.defaultShareRate, hours: s.remainHours||0 } : null;
+        }).filter(Boolean);
+      } else {
+        const all = (s.teacherBindings || []).map(b => {
+          const t = d.teachers.find(x=>x.id===b.teacherId);
+          return t ? { id: t.id, name: t.name, rate: t.shareRate || d.settings.defaultShareRate, hours: s.remainHours||0 } : null;
+        }).filter(Boolean);
+        teachers = all.length ? all : d.teachers.map(t => ({ id: t.id, name: t.name, rate: t.shareRate || d.settings.defaultShareRate, hours: s.remainHours||0 }));
+      }
     }
     const sel = $('#cf_teacher');
     if (sel) {
-      sel.innerHTML = teachers.map(t => `<option value="${t.id}">${t.name} (${t.rate}%)</option>`).join('');
+      sel.innerHTML = teachers.map(t => `<option value="${t.id}">${t.name} (${t.rate}%) 剩${t.hours}</option>`).join('');
     }
     // 更新单价
     const pf = s?.projectFees?.private || {};
@@ -2290,11 +2765,13 @@ const App = {
     const s = DB.get().students.find(x=>x.id===sid);
     const t = DB.get().teachers.find(x=>x.id===tid);
     if (!s || !t) return;
-    const remain = (s.remainHours||0) - hours;
+    // 从该老师的分配课时中扣减
+    const teacherHours = this.getTeacherHours(s, tid);
+    const remain = teacherHours - hours;
     const fee = hours * price * (t.shareRate||DB.get().settings.defaultShareRate) / 100;
     const el = $('#cf_preview');
     if (el) el.innerHTML = `
-      剩余课时: <strong>${s.remainHours||0}</strong> → 消耗后 <strong style="color:${remain<0?'var(--danger)':'var(--success)'}">${remain}</strong> |
+      ${t.name} 课时: <strong>${teacherHours}</strong> → 消耗后 <strong style="color:${remain<0?'var(--danger)':'var(--success)'}">${remain}</strong> |
       教师课时费: <strong>${fmtMoney(fee)}</strong> = ${hours} × ${fmtMoney(price)} × ${t.shareRate||DB.get().settings.defaultShareRate}%
     `;
   },
@@ -2311,7 +2788,21 @@ const App = {
     const d = DB.get();
     const s = d.students.find(x=>x.id===sid);
     if (!s) return;
-    if ((s.remainHours||0) < hours) { toast('剩余课时不足', 'error'); return; }
+    // 检查该老师的课时
+    const teacherHours = this.getTeacherHours(s, tid);
+    if (teacherHours < hours) { toast(`${d.teachers.find(x=>x.id===tid)?.name} 的剩余课时不足 (${teacherHours})`, 'error'); return; }
+
+    // 从该老师的分配课时中扣减
+    if (!s.teacherHours) s.teacherHours = [];
+    const th = s.teacherHours.find(x => x.teacherId === tid);
+    if (th) {
+      th.hours -= hours;
+    } else {
+      // 兼容旧数据: 创建 teacherHours
+      s.teacherHours.push({ teacherId: tid, hours: (s.remainHours||0) - hours });
+    }
+    // 更新汇总 remainHours
+    s.remainHours = (s.teacherHours || []).reduce((sum, x) => sum + (x.hours||0), 0);
 
     const log = {
       id: uid(),
@@ -2319,11 +2810,10 @@ const App = {
       teacherId: tid,
       hours, unitPrice: price,
       date: new Date(date).toISOString(),
-      remainAfter: s.remainHours - hours,
+      remainAfter: teacherHours - hours,
       note,
     };
     d.hourLogs.push(log);
-    s.remainHours -= hours;
     DB.persist();
     this.closeModal();
     toast(`已记录 ${s.name} 消课 ${hours} 课时`);
@@ -2331,12 +2821,22 @@ const App = {
   },
 
   delHourLog(id) {
-    if (!confirm('确认删除该消课记录？课时会退回给学生。')) return;
+    if (!confirm('确认删除该消课记录？课时会退回给对应老师。')) return;
     const d = DB.get();
     const log = d.hourLogs.find(x=>x.id===id);
     if (!log) return;
     const s = d.students.find(x=>x.id===log.studentId);
-    if (s) s.remainHours = (s.remainHours||0) + log.hours;
+    if (s) {
+      // 课时退回给该老师
+      if (!s.teacherHours) s.teacherHours = [];
+      const th = s.teacherHours.find(x => x.teacherId === log.teacherId);
+      if (th) {
+        th.hours += log.hours;
+      } else {
+        s.teacherHours.push({ teacherId: log.teacherId, hours: log.hours });
+      }
+      s.remainHours = (s.teacherHours || []).reduce((sum, x) => sum + (x.hours||0), 0);
+    }
     d.hourLogs = d.hourLogs.filter(x=>x.id!==id);
     DB.persist();
     toast('已删除, 课时已退回');
@@ -2593,6 +3093,7 @@ const App = {
           <button class="btn btn-secondary" onclick="App.exportExcel('teachers')">🧑‍🏫 教师数据</button>
           <button class="btn btn-secondary" onclick="App.exportExcel('payments')">💰 缴费记录</button>
           <button class="btn btn-secondary" onclick="App.exportExcel('hours')">⏱️ 消课记录</button>
+          <button class="btn btn-secondary" onclick="App.exportExcel('attendance')">📅 考勤记录</button>
           <button class="btn btn-secondary" onclick="App.exportExcel('salary')">💸 工资结算</button>
           <button class="btn btn-primary" onclick="App.exportExcel('all')">📦 全部导出</button>
         </div>
@@ -2830,10 +3331,12 @@ ON CONFLICT (id) DO NOTHING;`;
         <button class="btn btn-primary" onclick="location.hash=''">返回工作台</button></div>`;
     }
 
-    // 该教师绑定的学生 (只显示小课绑定的)
+    // 该教师绑定的学生 (只显示小课绑定 或 有课时分配的)
     const myStudents = d.students.filter(s =>
-      (s.enrollTypes||[]).includes('private') &&
-      (s.teacherBindings||[]).some(b => b.teacherId === t.id)
+      (s.enrollTypes||[]).includes('private') && (
+        (s.teacherBindings||[]).some(b => b.teacherId === t.id) ||
+        (s.teacherHours||[]).some(th => th.teacherId === t.id)
+      )
     );
 
     // 本月消课记录
@@ -2861,7 +3364,7 @@ ON CONFLICT (id) DO NOTHING;`;
         </div>
 
         <div class="highlight-box">
-          👋 点击学生下方的按钮即可快速消课。仅显示学生姓名与剩余课时，其他数据已隐藏。
+          👋 点击学生下方的按钮即可快速消课。仅显示学生姓名与你分配的剩余课时，其他数据已隐藏。
         </div>
       </div>
 
@@ -2871,17 +3374,19 @@ ON CONFLICT (id) DO NOTHING;`;
         </div>
         ${myStudents.length ? `
           <div class="consume-quick-grid">
-            ${myStudents.map(s => `
+            ${myStudents.map(s => {
+              const myHours = this.getTeacherHours(s, t.id);
+              return `
               <div class="consume-quick-item">
                 <div class="consume-quick-name">${s.name}</div>
-                <div class="consume-quick-info">剩余 <strong style="color:${(s.remainHours||0)<=2?'var(--danger)':'var(--success)'}">${s.remainHours||0}</strong> 课时</div>
+                <div class="consume-quick-info">剩余 <strong style="color:${myHours<=2?'var(--danger)':'var(--success)'}">${myHours}</strong> 课时</div>
                 <div class="consume-quick-actions">
                   <button class="consume-mini-btn" onclick="App.shareQuickConsume('${s.id}', 1)">-1</button>
                   <button class="consume-mini-btn" onclick="App.shareQuickConsume('${s.id}', 2)">-2</button>
                   <button class="consume-mini-btn" onclick="App.shareConsumeForm('${s.id}')">自定义</button>
                 </div>
-              </div>
-            `).join('')}
+              </div>`;
+            }).join('')}
           </div>
         ` : `<div class="empty-state"><div class="empty-state-icon">👥</div><div class="empty-state-text">暂无绑定的小课学生</div></div>`}
       </div>
@@ -2915,21 +3420,31 @@ ON CONFLICT (id) DO NOTHING;`;
   shareQuickConsume(studentId, hours) {
     const s = DB.get().students.find(x=>x.id===studentId);
     if (!s) return;
-    if ((s.remainHours||0) < hours) { toast('剩余课时不足', 'error'); return; }
+    const tid = this.shareTeacherId;
+    const teacherHours = this.getTeacherHours(s, tid);
+    if (teacherHours < hours) { toast('你的剩余课时不足', 'error'); return; }
     const d = DB.get();
     const pf = s.projectFees?.private || {};
     const unitPrice = pf.unitPrice || 100;
+    // 从该老师的分配课时中扣减
+    if (!s.teacherHours) s.teacherHours = [];
+    const th = s.teacherHours.find(x => x.teacherId === tid);
+    if (th) {
+      th.hours -= hours;
+    } else {
+      s.teacherHours.push({ teacherId: tid, hours: teacherHours - hours });
+    }
+    s.remainHours = (s.teacherHours || []).reduce((sum, x) => sum + (x.hours||0), 0);
     const log = {
       id: uid(),
       studentId,
-      teacherId: this.shareTeacherId,
+      teacherId: tid,
       hours,
       unitPrice,
       date: new Date().toISOString(),
-      remainAfter: s.remainHours - hours,
+      remainAfter: teacherHours - hours,
     };
     d.hourLogs.push(log);
-    s.remainHours -= hours;
     DB.persist();
     toast(`已为 ${s.name} 消课 ${hours} 课时`);
     this.render();
@@ -2939,14 +3454,15 @@ ON CONFLICT (id) DO NOTHING;`;
     const d = DB.get();
     const t = d.teachers.find(x=>x.id===this.shareTeacherId);
     const myStudents = d.students.filter(s =>
-      (s.enrollTypes||[]).includes('private') &&
-      (s.teacherBindings||[]).some(b => b.teacherId === this.shareTeacherId)
+      (s.enrollTypes||[]).includes('private') && (
+        (s.teacherBindings||[]).some(b => b.teacherId === this.shareTeacherId) ||
+        (s.teacherHours||[]).some(th => th.teacherId === this.shareTeacherId)
+      )
     );
     if (!myStudents.length) { toast('暂无可消课学生', 'warning'); return; }
 
     const s = studentId ? d.students.find(x=>x.id===studentId) : null;
     const preStudent = s ? s.id : '';
-    const pf = s?.projectFees?.private || {};
 
     this.openModal(`
       <div class="modal-header">
@@ -2957,7 +3473,7 @@ ON CONFLICT (id) DO NOTHING;`;
         <div class="form-group">
           <label class="form-label">学生<span class="required">*</span></label>
           <select class="form-select" id="cf_student" onchange="App.updateShareConsume()">
-            ${myStudents.map(s=>`<option value="${s.id}" ${preStudent===s.id?'selected':''}>${s.name} (剩${s.remainHours||0})</option>`).join('')}
+            ${myStudents.map(s=>`<option value="${s.id}" ${preStudent===s.id?'selected':''}>${s.name} (剩${this.getTeacherHours(s, this.shareTeacherId)})</option>`).join('')}
           </select>
         </div>
         <div class="form-row">
@@ -2990,10 +3506,11 @@ ON CONFLICT (id) DO NOTHING;`;
     if (!sid) return;
     const s = DB.get().students.find(x=>x.id===sid);
     if (!s) return;
-    const remain = (s.remainHours||0) - hours;
+    const myHours = this.getTeacherHours(s, this.shareTeacherId);
+    const remain = myHours - hours;
     const el = $('#cf_preview');
     if (el) el.innerHTML = `
-      剩余课时: <strong>${s.remainHours||0}</strong> → 消耗后 <strong style="color:${remain<0?'var(--danger)':'var(--success)'}">${remain}</strong>
+      你的剩余课时: <strong>${myHours}</strong> → 消耗后 <strong style="color:${remain<0?'var(--danger)':'var(--success)'}">${remain}</strong>
     `;
   },
 
@@ -3006,20 +3523,30 @@ ON CONFLICT (id) DO NOTHING;`;
     const d = DB.get();
     const s = d.students.find(x=>x.id===sid);
     if (!s) return;
-    if ((s.remainHours||0) < hours) { toast('剩余课时不足', 'error'); return; }
+    const tid = this.shareTeacherId;
+    const teacherHours = this.getTeacherHours(s, tid);
+    if (teacherHours < hours) { toast('你的剩余课时不足', 'error'); return; }
     const pf = s.projectFees?.private || {};
+    // 从该老师的分配课时中扣减
+    if (!s.teacherHours) s.teacherHours = [];
+    const th = s.teacherHours.find(x => x.teacherId === tid);
+    if (th) {
+      th.hours -= hours;
+    } else {
+      s.teacherHours.push({ teacherId: tid, hours: teacherHours - hours });
+    }
+    s.remainHours = (s.teacherHours || []).reduce((sum, x) => sum + (x.hours||0), 0);
     const log = {
       id: uid(),
       studentId: sid,
-      teacherId: this.shareTeacherId,
+      teacherId: tid,
       hours,
       unitPrice: pf.unitPrice || 100,
       date: new Date(date).toISOString(),
-      remainAfter: s.remainHours - hours,
+      remainAfter: teacherHours - hours,
       note,
     };
     d.hourLogs.push(log);
-    s.remainHours -= hours;
     DB.persist();
     this.closeModal();
     toast(`已记录 ${s.name} 消课 ${hours} 课时`);
@@ -3129,16 +3656,24 @@ ON CONFLICT (id) DO NOTHING;`;
     };
 
     if (type === 'students' || type === 'all') {
-      const rows = [['姓名','年级','监护人','电话','学校','地址','报名类型','绑定教师','小课剩余课时','备注','建档日期']];
+      const rows = [['姓名','年级','监护人','电话','学校','地址','报名类型','绑定教师','年级固定老师','小课课时分配','小课剩余总课时','备注','建档日期']];
       d.students.forEach(s => {
         const teachers = (s.teacherBindings||[]).map(b => {
           const t = d.teachers.find(x=>x.id===b.teacherId);
           return t ? t.name + (b.subject?`(${b.subject})`:'') : '';
         }).join('; ');
+        const gts = (s.gradeTeachers||[]).map(gt => {
+          const t = d.teachers.find(x=>x.id===gt.teacherId);
+          return t ? t.name : '';
+        }).join('; ');
+        const thStr = (s.teacherHours||[]).map(th => {
+          const t = d.teachers.find(x=>x.id===th.teacherId);
+          return (t?t.name:'已删除')+':'+(th.hours||0);
+        }).join('; ');
         rows.push([
           s.name, s.grade||'', s.guardian||'', s.phone||'', s.school||'', s.addr||'',
           (s.enrollTypes||[]).map(t=>ENROLL_TYPES.find(x=>x.key===t)?.label||t).join('/'),
-          teachers, s.remainHours||0, s.notes||'',
+          teachers, gts, thStr || (s.remainHours||0), s.remainHours||0, s.notes||'',
           s.createdAt ? new Date(s.createdAt).toLocaleDateString('zh-CN') : ''
         ]);
       });
@@ -3185,6 +3720,48 @@ ON CONFLICT (id) DO NOTHING;`;
         ]);
       });
       ws2a(rows, '消课记录');
+    }
+
+    if (type === 'attendance' || type === 'all') {
+      const month = this.state.currentMonth;
+      const [y, m] = month.split('-').map(Number);
+      const daysInMonth = new Date(y, m, 0).getDate();
+      const header = ['学生','年级','类型'];
+      for (let day = 1; day <= daysInMonth; day++) header.push(`${day}日`);
+      header.push('出勤天数','缺勤天数');
+      const rows = [header];
+      d.students.forEach(s => {
+        // 晚辅导/暑期班
+        if ((s.enrollTypes||[]).some(t => t === 'evening' || t === 'summer')) {
+          const recs = s.attendanceRecords?.[month]?.evening_summer || {};
+          const row = [s.name, s.grade||'', '晚辅导/暑期班'];
+          let present = 0, absent = 0;
+          for (let day = 1; day <= daysInMonth; day++) {
+            const ds = `${month}-${String(day).padStart(2,'0')}`;
+            const status = recs[ds] || 'present';
+            if (status === 'absent') { row.push('缺'); absent++; }
+            else if (status === 'half') { row.push('半缺'); absent += 0.5; }
+            else { row.push('出'); present++; }
+          }
+          row.push(present, absent);
+          rows.push(row);
+        }
+        // 周末托
+        if ((s.enrollTypes||[]).includes('weekend')) {
+          const recs = s.attendanceRecords?.[month]?.weekend || {};
+          const row = [s.name, s.grade||'', '周末托'];
+          let present = 0, absent = 0;
+          for (let day = 1; day <= daysInMonth; day++) {
+            const ds = `${month}-${String(day).padStart(2,'0')}`;
+            const status = recs[ds] || 'absent';
+            if (status === 'present') { row.push('出'); present++; }
+            else { row.push('缺'); absent++; }
+          }
+          row.push(present, absent);
+          rows.push(row);
+        }
+      });
+      ws2a(rows, '学生考勤_'+month);
     }
 
     if (type === 'salary' || type === 'all') {
