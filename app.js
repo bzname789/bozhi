@@ -224,6 +224,7 @@ const App = {
     filterType: '',
     filterDept: '',
     attendanceTab: 'teacher',
+    shareTab: 'consume',   // 教师分享端: 'consume' | 'attendance'
   },
 
   init() {
@@ -432,13 +433,17 @@ const App = {
 
   renderShareTopbar() {
     const t = DB.get().teachers.find(x=>x.id===this.shareTeacherId);
+    const tab = this.state.shareTab || 'consume';
     return `
       <div class="topbar" style="background:linear-gradient(135deg,#34a853 0%,#2d8a47 100%)">
         <div class="topbar-logo">
           <span class="logo-icon" style="background:#fff;color:#34a853">博</span>
-          <span>${DB.get().settings.orgName} · 消课端</span>
+          <span>${DB.get().settings.orgName} · 教师端</span>
         </div>
-        <div class="topbar-nav"></div>
+        <div class="topbar-nav" style="display:flex;gap:4px">
+          <button class="btn btn-sm share-tab-btn" style="background:${tab==='consume'?'rgba(255,255,255,.25)':'rgba(255,255,255,.1)'};color:#fff;border:none" onclick="App.state.shareTab='consume'; App.render()">⏱️ 消课</button>
+          <button class="btn btn-sm share-tab-btn" style="background:${tab==='attendance'?'rgba(255,255,255,.25)':'rgba(255,255,255,.1)'};color:#fff;border:none" onclick="App.state.shareTab='attendance'; App.render()">📅 考勤</button>
+        </div>
         <div class="topbar-actions">
           <span class="date-now">${t ? '欢迎, ' + t.name : '教师'}</span>
         </div>
@@ -519,7 +524,8 @@ const App = {
     const mainClass = this.device === 'mobile' ? 'main mobile-main' : 'main';
     let content = '';
     if (this.shareMode) {
-      content = this.viewShareConsume();
+      const tab = this.state.shareTab || 'consume';
+      content = tab === 'attendance' ? this.viewShareAttendance() : this.viewShareConsume();
       return `<div class="${mainClass}">${content}</div>`;
     }
     switch (this.view) {
@@ -3550,6 +3556,246 @@ ON CONFLICT (id) DO NOTHING;`;
     DB.persist();
     this.closeModal();
     toast(`已记录 ${s.name} 消课 ${hours} 课时`);
+    this.render();
+  },
+
+  /* ====================================================================
+   *  教师分享端 - 考勤管理
+   *  规则: 
+   *    - 晚辅导/暑期班: 只有学生的年级固定老师可以标记缺勤
+   *    - 周末托: 所有老师都可以标记出勤
+   * ================================================================== */
+  viewShareAttendance() {
+    const d = DB.get();
+    const t = d.teachers.find(x=>x.id===this.shareTeacherId);
+    if (!t) {
+      return `<div class="empty-state"><div class="empty-state-icon">🔒</div><div class="empty-state-text">链接已失效</div>
+        <button class="btn btn-primary" onclick="location.hash=''">返回工作台</button></div>`;
+    }
+    const month = this.state.currentMonth;
+    const [y, m] = month.split('-').map(Number);
+    const daysInMonth = new Date(y, m, 0).getDate();
+
+    // 晚辅导/暑期班: 该老师是年级固定老师的学生
+    const eveningSummerStudents = d.students.filter(s =>
+      (s.enrollTypes||[]).some(et => et === 'evening' || et === 'summer') &&
+      (s.gradeTeachers||[]).some(gt => gt.teacherId === t.id)
+    );
+
+    // 周末托: 所有学生（任意老师可标记出勤）
+    const weekendStudents = d.students.filter(s =>
+      (s.enrollTypes||[]).includes('weekend')
+    );
+
+    const getStudentAttendance = (s, type) => {
+      return s.attendanceRecords?.[month]?.[type] || {};
+    };
+
+    const countStudentAtt = (s, type, defaultPresent) => {
+      const records = getStudentAttendance(s, type);
+      const marked = Object.keys(records).length;
+      if (defaultPresent) {
+        const absent = Object.values(records).filter(v => v === 'absent').length;
+        const halfAbsent = Object.values(records).filter(v => v === 'half').length;
+        return { absent, halfAbsent, marked, present: daysInMonth - absent - halfAbsent };
+      } else {
+        const present = Object.values(records).filter(v => v === 'present').length;
+        return { present, absent: daysInMonth - present, marked };
+      }
+    };
+
+    return `
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title"><span class="title-icon" style="background:#34a853"></span>${t.name} 的考勤台</div>
+          <div class="month-selector">
+            <button class="month-nav-btn" onclick="App.state.currentMonth=monthNav(App.state.currentMonth,-1); App.render()">‹</button>
+            <input type="month" value="${month}" onchange="App.state.currentMonth=this.value; App.render()">
+            <button class="month-nav-btn" onclick="App.state.currentMonth=monthNav(App.state.currentMonth,1); App.render()">›</button>
+          </div>
+        </div>
+
+        <div class="stats-grid">
+          ${this.statCard('green','📚', eveningSummerStudents.length, '晚辅导/暑期班学生', '固定老师')}
+          ${this.statCard('orange','📅', weekendStudents.length, '周末托学生', '全员可标记')}
+        </div>
+      </div>
+
+      <!-- 晚辅导/暑期班 -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title"><span class="title-icon" style="background:#1890ff"></span>📚 晚辅导/暑期班 — 默认出勤，标记缺勤</div>
+        </div>
+        <div class="highlight-box">
+          你是以下学生的<strong>年级固定老师</strong>，可为其标记缺勤。默认所有学生出勤。
+        </div>
+        ${eveningSummerStudents.length ? `
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>学生</th>
+                  <th>年级</th>
+                  <th>出勤</th>
+                  <th>缺勤</th>
+                  <th>半天缺</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${eveningSummerStudents.map(s => {
+                  const att = countStudentAtt(s, 'evening_summer', true);
+                  const types = (s.enrollTypes||[]).filter(et => et === 'evening' || et === 'summer')
+                    .map(et => `<span class="tag ${ENROLL_TYPES.find(x=>x.key===et)?.cls}">${ENROLL_TYPES.find(x=>x.key===et)?.label}</span>`).join(' ');
+                  return `<tr>
+                    <td><strong>${s.name}</strong> ${types}</td>
+                    <td>${s.grade||'-'}</td>
+                    <td><strong style="color:var(--success)">${att.present}</strong></td>
+                    <td><strong style="color:${att.absent>0?'var(--danger)':'var(--text-light)'}">${att.absent}</strong></td>
+                    <td><strong style="color:${att.halfAbsent>0?'var(--accent)':'var(--text-light)'}">${att.halfAbsent||0}</strong></td>
+                    <td>
+                      <button class="btn btn-ghost btn-sm" onclick="App.shareOpenStudentAbsentModal('${s.id}', 'evening_summer')">${att.marked>0?'编辑':'标记缺勤'}</button>
+                    </td>
+                  </tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        ` : `<div class="empty-state"><div class="empty-state-icon">📚</div><div class="empty-state-text">暂无你作为固定老师的晚辅导/暑期班学生</div></div>`}
+      </div>
+
+      <!-- 周末托 -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title"><span class="title-icon" style="background:#fa8c16"></span>📅 周末托 — 默认缺勤，标记出勤</div>
+        </div>
+        <div class="highlight-box">
+          所有老师都可以标记周末托学生的出勤。默认所有学生缺勤，点击标记出勤。
+        </div>
+        ${weekendStudents.length ? `
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>学生</th>
+                  <th>年级</th>
+                  <th>已标记出勤</th>
+                  <th>缺勤</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${weekendStudents.map(s => {
+                  const att = countStudentAtt(s, 'weekend', false);
+                  return `<tr>
+                    <td><strong>${s.name}</strong> <span class="tag tag-green">周末托</span></td>
+                    <td>${s.grade||'-'}</td>
+                    <td><strong style="color:var(--success)">${att.present}</strong></td>
+                    <td><strong style="color:var(--text-light)">${att.absent}</strong></td>
+                    <td>
+                      <button class="btn btn-ghost btn-sm" onclick="App.shareOpenStudentAbsentModal('${s.id}', 'weekend')">${att.marked>0?'编辑':'标记出勤'}</button>
+                    </td>
+                  </tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        ` : `<div class="empty-state"><div class="empty-state-icon">📅</div><div class="empty-state-text">暂无周末托学生</div></div>`}
+      </div>
+    `;
+  },
+
+  shareOpenStudentAbsentModal(studentId, attType) {
+    const d = DB.get();
+    const s = d.students.find(x=>x.id===studentId);
+    if (!s) return;
+    const month = this.state.currentMonth;
+    const [y, m] = month.split('-').map(Number);
+    const daysInMonth = new Date(y, m, 0).getDate();
+    const isWeekend = attType === 'weekend';
+    const records = s.attendanceRecords?.[month]?.[attType] || {};
+
+    const dayCells = [];
+    for (let day = 1; day <= daysInMonth; day++) {
+      const dateStr = `${month}-${String(day).padStart(2,'0')}`;
+      const weekday = new Date(y, m-1, day).getDay();
+      const isWeekendDay = weekday === 0 || weekday === 6;
+      let status, cls, label;
+      if (isWeekend) {
+        status = records[dateStr] || 'absent';
+        if (status === 'present') { cls = 'present'; label = '出'; }
+        else { cls = 'absent'; label = '缺'; }
+      } else {
+        status = records[dateStr] || 'present';
+        if (status === 'absent') { cls = 'absent'; label = '全天缺'; }
+        else if (status === 'half') { cls = 'half-absent'; label = '半天缺'; }
+        else { cls = ''; label = '出'; }
+      }
+      dayCells.push(`
+        <div class="absent-day-cell ${cls} ${isWeekendDay?'weekend':''}" data-date="${dateStr}" data-status="${status}" data-type="${attType}" onclick="App.cycleStudentAbsentDay(this)">
+          <div class="day-num">${day}</div>
+          <div class="day-status">${label}</div>
+        </div>
+      `);
+    }
+
+    const title = isWeekend ? `标记出勤 · ${s.name} (${month})` : `标记缺勤 · ${s.name} (${month})`;
+    const hint = isWeekend
+      ? '点击日期切换：<strong>缺勤 → 出勤 → 缺勤</strong>（周末托默认缺勤）'
+      : '点击日期切换：<strong>出勤 → 半天缺 → 全天缺 → 出勤</strong>（默认出勤）';
+
+    this.openModal(`
+      <div class="modal-header">
+        <div class="modal-title">${title}</div>
+        <button class="modal-close" data-close-modal>×</button>
+      </div>
+      <div class="modal-body">
+        <div class="highlight-box">${hint}</div>
+        <div class="absent-calendar">${dayCells.join('')}</div>
+        <div style="margin-top:12px;display:flex;gap:12px;font-size:12px;flex-wrap:wrap">
+          ${isWeekend ? `
+            <span><span class="dot dot-green"></span>出勤</span>
+            <span><span class="dot dot-red"></span>缺勤（默认）</span>
+          ` : `
+            <span><span class="dot dot-green"></span>出勤（默认）</span>
+            <span><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--accent);margin-right:6px"></span>半天缺勤</span>
+            <span><span class="dot dot-red"></span>全天缺勤</span>
+          `}
+          <span style="color:var(--text-light)">灰色=周末</span>
+        </div>
+        <div id="absentSummary" style="margin-top:12px;padding:10px;background:var(--primary-light);border-radius:8px;font-size:13px"></div>
+      </div>
+      <div class="modal-footer">
+        ${isWeekend ? '<button class="btn btn-secondary" onclick="App.clearAllStudentAbsent()">全部缺勤</button>' : '<button class="btn btn-secondary" onclick="App.clearAllStudentAbsent()">全部出勤</button>'}
+        <button class="btn btn-secondary" data-close-modal>取消</button>
+        <button class="btn btn-primary" onclick="App.saveShareStudentAbsent('${studentId}', '${attType}')">保存</button>
+      </div>
+    `);
+
+    this.updateStudentAbsentSummary(attType);
+  },
+
+  saveShareStudentAbsent(studentId, attType) {
+    const d = DB.get();
+    const s = d.students.find(x=>x.id===studentId);
+    if (!s) return;
+    const month = this.state.currentMonth;
+    if (!s.attendanceRecords) s.attendanceRecords = {};
+    if (!s.attendanceRecords[month]) s.attendanceRecords[month] = {};
+    const records = {};
+    $$('.absent-day-cell').forEach(el => {
+      const status = el.dataset.status;
+      const date = el.dataset.date;
+      if (attType === 'weekend') {
+        if (status === 'present') records[date] = 'present';
+      } else {
+        if (status === 'absent' || status === 'half') records[date] = status;
+      }
+    });
+    s.attendanceRecords[month][attType] = records;
+    DB.persist();
+    this.closeModal();
+    toast(`已保存 ${s.name} 的考勤记录`);
     this.render();
   },
 
