@@ -1975,7 +1975,8 @@ const App = {
 
     const postBonus = t.isAdmin ? (rec.postBonus || 200) : (rec.postBonus || 0);
     const transportBonus = rec.transportBonus || 0;
-    const socialType = rec.socialType || (t.socialInsurance > 0 ? 'pay' : 'none');
+    // 社保: 优先用本月设置的, 回退到教师默认值, 再回退到 'none'
+    const socialType = rec.socialType || t.socialType || 'none';
     const socialAmount = rec.socialInsurance ?? t.socialInsurance ?? 0;
     const socialDeduction = socialType === 'pay' ? socialAmount : 0;
     const socialSubsidy = socialType === 'none' ? socialAmount : 0;
