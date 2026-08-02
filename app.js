@@ -1856,12 +1856,18 @@ const App = {
     const oldRec = t.salaryRecords[monthKey] || {};
     const socialType = $('#se_social_type').value;
     const shouldDays = Number($('#se_should').value)||0;
+    // 保留完整的考勤记录 (absentRecords 优先于 absentDays)
+    const absentRecords = oldRec.absentRecords || {};
     const absentDays = oldRec.absentDays || [];
-    const actualDays = shouldDays - absentDays.length;
+    const fullAbsent = Object.values(absentRecords).filter(v => v === 'full').length;
+    const halfAbsent = Object.values(absentRecords).filter(v => v === 'half').length;
+    const absentCount = fullAbsent + halfAbsent * 0.5;
+    const actualDays = Math.max(0, shouldDays - absentCount);
     t.salaryRecords[monthKey] = {
       shouldDays,
       actualDays,
-      absentDays,  // 保留考勤记录
+      absentRecords,  // 保留半天/全天缺勤
+      absentDays,     // 兼容旧格式
       perfScore: Number($('#se_perf').value)||0,
       fullAttendBonus: Number($('#se_full').value)||0,
       perfAllowance: Number($('#se_perfallow').value)||0,
@@ -1921,7 +1927,8 @@ const App = {
 
       const postBonus = t.isAdmin ? (rec.postBonus || 200) : (rec.postBonus || 0);
       const transportBonus = rec.transportBonus || 0;
-      const socialType = rec.socialType || (t.socialInsurance > 0 ? 'pay' : 'none');
+      // 社保: 优先用本月设置的, 回退到教师默认值, 再回退到 'none'
+      const socialType = rec.socialType || t.socialType || 'none';
       const socialAmount = rec.socialInsurance ?? t.socialInsurance ?? 0;
       const socialDeduction = socialType === 'pay' ? socialAmount : 0;
       const socialSubsidy = socialType === 'none' ? socialAmount : 0;
