@@ -1488,6 +1488,11 @@ const App = {
             <label class="form-label" id="tf_social_label">${t && t.socialType==='pay'?'社保扣除金额 (元)':'社保补贴金额 (元)'}</label>
             <input class="form-input" type="number" id="tf_social" value="${data.socialInsurance||0}">
           </div>
+          <div style="margin-top:8px">
+            <label class="form-label">生效月份 <span class="hint">从哪个月开始应用此社保设置</span></label>
+            <input class="form-input" type="month" id="tf_social_eff" value="${data.socialEffectiveMonth||t?.socialEffectiveMonth||thisMonth()}">
+            <div class="form-hint">⚠️ 仅对当月及之后生效。之前月份的社保设置不受影响。</div>
+          </div>
         </div>
         <div class="form-group">
           <label class="form-label">岗位</label>
@@ -1554,6 +1559,7 @@ const App = {
       shareRate: Number($('#tf_share').value)||0,
       socialType: $('#tf_social_type').value,
       socialInsurance: Number($('#tf_social').value)||0,
+      socialEffectiveMonth: $('#tf_social_eff')?.value || thisMonth(),
       isAdmin: $$('#tf_isadmin .radio-item.checked')[0]?.dataset.key === '1',
       notes: $('#tf_notes').value.trim(),
     };
@@ -1620,7 +1626,7 @@ const App = {
           <div class="info-item"><span class="info-label">基本工资</span><span class="info-value">${fmtMoney(t.baseSalary)}</span></div>
           <div class="info-item"><span class="info-label">绩效基数</span><span class="info-value">${fmtMoney(t.perfBase)}</span></div>
           <div class="info-item"><span class="info-label">小课分成</span><span class="info-value">${t.shareRate||DB.get().settings.defaultShareRate}%</span></div>
-          <div class="info-item"><span class="info-label">社保</span><span class="info-value">${t.socialType==='pay'?`缴纳 (扣${fmtMoney(t.socialInsurance)})`:t.socialType==='none'?`不缴纳 ${t.socialInsurance>0?'(补贴'+fmtMoney(t.socialInsurance)+')':'(无补贴)'}`:'未设置'}</span></div>
+          <div class="info-item"><span class="info-label">社保</span><span class="info-value">${t.socialType==='pay'?`缴纳 (扣${fmtMoney(t.socialInsurance)})`:t.socialType==='none'?`不缴纳 ${t.socialInsurance>0?'(补贴'+fmtMoney(t.socialInsurance)+')':'(无补贴)'}`:'未设置'} · 自 ${t.socialEffectiveMonth||'初始'} 起生效</span></div>
           <div class="info-item"><span class="info-label">岗位</span><span class="info-value">${t.isAdmin?'管理岗':'普通教师'}</span></div>
           <div class="info-item"><span class="info-label">教师类型</span><span class="info-value">${(t.jobType||'full')==='full'?'全职':(t.jobType==='hourly'?'时薪制':'兼职')} ${(t.jobType||'full')==='part'?'<span class="tag tag-gray">无全勤奖</span>':(t.jobType==='hourly'?'<span class="tag tag-cyan">按时薪算</span>':'<span class="tag tag-green">享全勤奖</span>')}</span></div>
           ${t.jobType==='hourly' ? `
@@ -1910,6 +1916,47 @@ const App = {
     const absentCount = fullAbsent + halfAbsent * 0.5;  // 缺勤天数(半天算0.5)
     const actualDays = rec.actualDays ?? (shouldDays - absentCount);
 
+    // ---- 社保: 本月有显式保存用本月, 否则按生效月份继承 ----
+    // 规则: 
+    //   1. 如果 salaryRecords[month] 有 socialType 字段, 直接用 (手动设置过的)
+    //   2. 如果 month >= t.socialEffectiveMonth, 用 t.socialType / t.socialInsurance (教师当前设置)
+    //   3. 如果 month < t.socialEffectiveMonth, 向前查找该月之前最近一次 salaryRecords 中的设置
+    //   4. 都找不到, 用 t.socialType / t.socialInsurance (教师初始默认)
+    let socialType, socialAmount;
+    if ('socialType' in rec) {
+      // 本月手动设置过
+      socialType = rec.socialType || 'none';
+      socialAmount = rec.socialInsurance ?? 0;
+    } else {
+      const effMonth = t.socialEffectiveMonth || '2000-01';
+      if (month >= effMonth) {
+        // 当月 >= 生效月, 用教师当前设置
+        socialType = t.socialType || 'none';
+        socialAmount = t.socialInsurance ?? 0;
+      } else {
+        // 当月 < 生效月, 向前查找最近一次 salaryRecords 中的社保设置
+        const allMonths = Object.keys(t.salaryRecords || {}).sort().reverse();
+        let foundType = null, foundAmount = null;
+        for (const m of allMonths) {
+          if (m < month && 'socialType' in (t.salaryRecords[m] || {})) {
+            foundType = t.salaryRecords[m].socialType || 'none';
+            foundAmount = t.salaryRecords[m].socialInsurance ?? 0;
+            break;
+          }
+        }
+        if (foundType !== null) {
+          socialType = foundType;
+          socialAmount = foundAmount;
+        } else {
+          // 找不到历史记录, 用教师初始值 (变更前的值)
+          socialType = t.socialType || 'none';
+          socialAmount = t.socialInsurance ?? 0;
+        }
+      }
+    }
+    const socialDeduction = socialType === 'pay' ? socialAmount : 0;
+    const socialSubsidy = socialType === 'none' ? socialAmount : 0;
+
     if (isHourly) {
       // ===== 时薪制兼职: 工资 = 时薪 × 实际出勤工时 =====
       const hourlyRate = Number(t.hourlyRate) || 0;
@@ -1927,11 +1974,6 @@ const App = {
 
       const postBonus = t.isAdmin ? (rec.postBonus || 200) : (rec.postBonus || 0);
       const transportBonus = rec.transportBonus || 0;
-      // 社保: 优先用本月设置的, 回退到教师默认值, 再回退到 'none'
-      const socialType = rec.socialType || t.socialType || 'none';
-      const socialAmount = rec.socialInsurance ?? t.socialInsurance ?? 0;
-      const socialDeduction = socialType === 'pay' ? socialAmount : 0;
-      const socialSubsidy = socialType === 'none' ? socialAmount : 0;
 
       const total = hourlySalary + courseFee + postBonus + transportBonus
         + socialSubsidy - socialDeduction;
@@ -1975,11 +2017,6 @@ const App = {
 
     const postBonus = t.isAdmin ? (rec.postBonus || 200) : (rec.postBonus || 0);
     const transportBonus = rec.transportBonus || 0;
-    // 社保: 优先用本月设置的, 回退到教师默认值, 再回退到 'none'
-    const socialType = rec.socialType || t.socialType || 'none';
-    const socialAmount = rec.socialInsurance ?? t.socialInsurance ?? 0;
-    const socialDeduction = socialType === 'pay' ? socialAmount : 0;
-    const socialSubsidy = socialType === 'none' ? socialAmount : 0;
 
     const total = baseSalary + perfSalary + fullAttendBonus + perfAllowance
       + courseFee + postBonus + transportBonus + socialSubsidy
