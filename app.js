@@ -16,6 +16,11 @@ const DB = (() => {
       orgName: '博智托管',
       // 默认分成比例: 教师拿 60%, 托管 40%
       defaultShareRate: 60,
+      // 日期范围配置 (空=全年)
+      eveningDateStart: '',    // 晚辅导开始日期
+      eveningDateEnd: '',      // 晚辅导结束日期
+      summerDateStart: '',     // 寒暑期班开始日期
+      summerDateEnd: '',       // 寒暑期班结束日期
     },
   };
   let cache = null;
@@ -170,6 +175,27 @@ const monthNav = (m, d) => {
   return dt.getFullYear() + '-' + String(dt.getMonth()+1).padStart(2,'0');
 };
 
+// 判断日期是否为工作日 (周一~周五为工作日, 周六日为休息日)
+const isWorkday = (dateStr) => {
+  const d = new Date(dateStr + 'T00:00:00');
+  const w = d.getDay();
+  return w >= 1 && w <= 5;  // 1=周一 ~ 5=周五
+};
+// 判断日期是否为周末 (周六/周日)
+const isWeekendDay = (dateStr) => {
+  const d = new Date(dateStr + 'T00:00:00');
+  const w = d.getDay();
+  return w === 0 || w === 6;
+};
+
+// 获取某个日期是否在给定的日期范围内
+const inDateRange = (dateStr, rangeStart, rangeEnd) => {
+  if (!rangeStart) return true;  // 未配置范围则全年有效
+  if (dateStr < rangeStart) return false;
+  if (rangeEnd && dateStr > rangeEnd) return false;
+  return true;
+};
+
 /* Toast */
 function toast(msg, type='success') {
   const box = $('#toastBox') || (() => {
@@ -189,7 +215,7 @@ function toast(msg, type='success') {
 
 /* ---------- 常量 ---------- */
 const ENROLL_TYPES = [
-  { key: 'summer',    label: '暑期班', cls: 'tag-orange' },
+  { key: 'summer',    label: '寒暑期班', cls: 'tag-orange' },
   { key: 'evening',   label: '晚辅导', cls: 'tag-cyan' },
   { key: 'weekend',   label: '周末托', cls: 'tag-green' },
   { key: 'private',   label: '小课',   cls: 'tag-purple' },
@@ -778,7 +804,7 @@ const App = {
       name:'', grade:'', phone:'', school:'', enrollTypes:[],
       projectFees: {}, remainHours:0, notes:'', guardian:'', addr:'',
       teacherBindings: [],   // [{teacherId, subject, enrollType}]
-      gradeTeachers: [],     // [{teacherId}] 晚辅导/暑期班按年级绑定的固定老师
+      gradeTeachers: [],     // [{teacherId}] 晚辅导/寒暑期班按年级绑定的固定老师
     };
     const projectFees = data.projectFees || {};
     const bindings = data.teacherBindings || [];
@@ -931,7 +957,7 @@ const App = {
         <div id="bindingList">${bindingRows}</div>
 
         <hr class="divider">
-        <div style="font-weight:600;font-size:13px;margin-bottom:10px">📅 年级固定老师 <span class="hint">晚辅导/暑期班按年级绑定的老师（可多个），负责标记缺勤</span></div>
+        <div style="font-weight:600;font-size:13px;margin-bottom:10px">📅 年级固定老师 <span class="hint">晚辅导/寒暑期班按年级绑定的老师（可多个），负责标记缺勤</span></div>
         ${d.teachers.length ? `
           <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
             <select class="form-select" id="sf_gt_teacher" style="flex:1;min-width:140px">
@@ -1990,7 +2016,7 @@ const App = {
       return { shouldDays, absentCount, actualDays, absentLabels, hasAbsent: Object.keys(absentRecords).length > 0 };
     };
 
-    // 晚辅导/暑期班学生 (默认出勤, 标记缺勤)
+    // 晚辅导/寒暑期班学生 (默认出勤, 标记缺勤)
     const eveningSummerStudents = d.students.filter(s =>
       (s.enrollTypes||[]).some(t => t === 'evening' || t === 'summer')
     );
@@ -2000,27 +2026,64 @@ const App = {
       (s.enrollTypes||[]).includes('weekend')
     );
 
+    const settings = d.settings || {};
+
+    // 统计某月的有效天数 (日期范围内 + 匹配工作日/休息日)
+    const countValidDays = (type) => {
+      let count = 0;
+      for (let day = 1; day <= daysInMonth; day++) {
+        const dateStr = `${month}-${String(day).padStart(2,'0')}`;
+        if (type === 'evening_summer') {
+          // 晚辅导/寒暑期班: 需要日期范围内 + 工作日
+          const inEvening = inDateRange(dateStr, settings.eveningDateStart, settings.eveningDateEnd);
+          const inSummer = inDateRange(dateStr, settings.summerDateStart, settings.summerDateEnd);
+          if ((inEvening || inSummer) && isWorkday(dateStr)) count++;
+        } else {
+          // 周末托: 需要周末
+          if (isWeekendDay(dateStr)) count++;
+        }
+      }
+      return count;
+    };
+
+    // 检查某天是否为该考勤类型的有效日期
+    const isValidAttDay = (dateStr, type) => {
+      if (type === 'evening_summer') {
+        const inEvening = inDateRange(dateStr, settings.eveningDateStart, settings.eveningDateEnd);
+        const inSummer = inDateRange(dateStr, settings.summerDateStart, settings.summerDateEnd);
+        return (inEvening || inSummer) && isWorkday(dateStr);
+      }
+      return isWeekendDay(dateStr);
+    };
+
     // 获取学生考勤记录
     const getStudentAttendance = (s, type) => {
-      // type: 'evening_summer' | 'weekend'
       const records = s.attendanceRecords?.[month]?.[type] || {};
       return records;
     };
 
-    // 统计学生考勤
+    // 统计学生考勤 (只统计有效天数)
     const countStudentAtt = (s, type, defaultPresent) => {
       const records = getStudentAttendance(s, type);
-      const marked = Object.keys(records).length;
-      if (defaultPresent) {
-        // 晚辅导/暑期班: 默认出勤, 标记的是缺勤
-        const absent = Object.values(records).filter(v => v === 'absent').length;
-        const halfAbsent = Object.values(records).filter(v => v === 'half').length;
-        return { absent, halfAbsent, marked, present: daysInMonth - absent - halfAbsent };
-      } else {
-        // 周末托: 默认缺勤, 标记的是出勤
-        const present = Object.values(records).filter(v => v === 'present').length;
-        return { present, absent: daysInMonth - present, marked };
+      const totalValid = countValidDays(type);
+      let absent = 0, halfAbsent = 0, present = 0;
+      let marked = 0;
+
+      for (let day = 1; day <= daysInMonth; day++) {
+        const dateStr = `${month}-${String(day).padStart(2,'0')}`;
+        if (!isValidAttDay(dateStr, type)) continue; // 跳过无效日期
+        const status = records[dateStr];
+        if (defaultPresent) {
+          if (status === 'absent') absent++;
+          else if (status === 'half') { halfAbsent++; marked++; }
+          else present++;
+          if (status) marked++;
+        } else {
+          if (status === 'present') { present++; marked++; }
+          else absent++;
+        }
       }
+      return { absent, halfAbsent, marked, present, totalValid };
     };
 
     const tabBtn = (key, label, icon) => `
@@ -2042,7 +2105,7 @@ const App = {
 
         <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
           ${tabBtn('teacher','教师考勤','🧑‍🏫')}
-          ${tabBtn('evening_summer','晚辅导/暑期班','📚')}
+          ${tabBtn('evening_summer','晚辅导/寒暑期班','📚')}
           ${tabBtn('weekend','周末托','📅')}
         </div>
 
@@ -2093,8 +2156,8 @@ const App = {
 
         ${tab === 'evening_summer' ? `
           <div class="highlight-box">
-            📚 <strong>晚辅导/暑期班考勤</strong> — 默认所有学生出勤，由年级固定老师标记缺勤<br>
-            点击日期循环切换：出勤 → 半天缺勤 → 全天缺勤 → 出勤
+            📚 <strong>晚辅导/寒暑期班考勤</strong> — 仅工作日默认出勤，由年级固定老师标记缺勤<br>
+            日期范围在系统设置中配置（晚辅导和寒暑期班分别设置），非工作日不参与考勤
           </div>
           ${eveningSummerStudents.length ? `
             <div class="table-wrap">
@@ -2104,6 +2167,7 @@ const App = {
                     <th>学生</th>
                     <th>年级</th>
                     <th>年级老师</th>
+                    <th>有效天数</th>
                     <th>出勤</th>
                     <th>缺勤</th>
                     <th>半天缺</th>
@@ -2123,6 +2187,7 @@ const App = {
                       <td><strong>${s.name}</strong></td>
                       <td>${s.grade||'-'} ${types}</td>
                       <td>${gts.length ? gts.map(n=>`<span class="tag tag-cyan">${n}</span>`).join(' ') : '<span style="color:var(--danger)">未绑定</span>'}</td>
+                      <td><strong>${att.totalValid}</strong></td>
                       <td><strong style="color:var(--success)">${att.present}</strong></td>
                       <td><strong style="color:${att.absent>0?'var(--danger)':'var(--text-light)'}">${att.absent}</strong></td>
                       <td><strong style="color:${att.halfAbsent>0?'var(--accent)':'var(--text-light)'}">${att.halfAbsent||0}</strong></td>
@@ -2134,13 +2199,13 @@ const App = {
                 </tbody>
               </table>
             </div>
-          ` : `<div class="empty-state"><div class="empty-state-icon">📚</div><div class="empty-state-text">暂无晚辅导/暑期班学生</div></div>`}
+          ` : `<div class="empty-state"><div class="empty-state-icon">📚</div><div class="empty-state-text">暂无晚辅导/寒暑期班学生</div></div>`}
         ` : ''}
 
         ${tab === 'weekend' ? `
           <div class="highlight-box">
-            📅 <strong>周末托考勤</strong> — 默认所有学生缺勤，由任意老师标记出勤<br>
-            点击日期循环切换：缺勤 → 出勤 → 缺勤
+            📅 <strong>周末托考勤</strong> — 仅休息日（周六日）默认缺勤，由任意老师标记出勤<br>
+            工作日不参与周末托考勤
           </div>
           ${weekendStudents.length ? `
             <div class="table-wrap">
@@ -2149,6 +2214,7 @@ const App = {
                   <tr>
                     <th>学生</th>
                     <th>年级</th>
+                    <th>有效天数</th>
                     <th>已标记出勤</th>
                     <th>缺勤</th>
                     <th>操作</th>
@@ -2160,6 +2226,7 @@ const App = {
                     return `<tr>
                       <td><strong>${s.name}</strong> <span class="tag tag-green">周末托</span></td>
                       <td>${s.grade||'-'}</td>
+                      <td><strong>${att.totalValid}</strong></td>
                       <td><strong style="color:var(--success)">${att.present}</strong></td>
                       <td><strong style="color:var(--text-light)">${att.absent}</strong></td>
                       <td>
@@ -2306,7 +2373,7 @@ const App = {
     this.render();
   },
 
-  /* ---- 学生考勤 (晚辅导/暑期班 + 周末托) ---- */
+  /* ---- 学生考勤 (晚辅导/寒暑期班 + 周末托) ---- */
   openStudentAbsentModal(studentId, attType) {
     const d = DB.get();
     const s = d.students.find(x=>x.id===studentId);
@@ -2316,20 +2383,41 @@ const App = {
     const daysInMonth = new Date(y, m, 0).getDate();
     const isWeekend = attType === 'weekend';
     const records = s.attendanceRecords?.[month]?.[attType] || {};
+    const settings = d.settings || {};
 
     const dayCells = [];
     for (let day = 1; day <= daysInMonth; day++) {
       const dateStr = `${month}-${String(day).padStart(2,'0')}`;
       const weekday = new Date(y, m-1, day).getDay();
       const isWeekendDay = weekday === 0 || weekday === 6;
+
+      // 检查是否为有效考勤日
+      let isValid = false;
+      if (isWeekend) {
+        isValid = isWeekendDay;
+      } else {
+        const inEvening = inDateRange(dateStr, settings.eveningDateStart, settings.eveningDateEnd);
+        const inSummer = inDateRange(dateStr, settings.summerDateStart, settings.summerDateEnd);
+        isValid = (inEvening || inSummer) && !isWeekendDay;
+      }
+
+      if (!isValid) {
+        // 无效日期: 灰掉不可点击
+        dayCells.push(`
+          <div class="absent-day-cell disabled" data-date="${dateStr}" data-status="disabled" data-type="${attType}">
+            <div class="day-num">${day}</div>
+            <div class="day-status">-</div>
+          </div>
+        `);
+        continue;
+      }
+
       let status, cls, label;
       if (isWeekend) {
-        // 周末托: 默认缺勤, 标记出勤
         status = records[dateStr] || 'absent';
         if (status === 'present') { cls = 'present'; label = '出'; }
         else { cls = 'absent'; label = '缺'; }
       } else {
-        // 晚辅导/暑期班: 默认出勤, 标记缺勤
         status = records[dateStr] || 'present';
         if (status === 'absent') { cls = 'absent'; label = '全天缺'; }
         else if (status === 'half') { cls = 'half-absent'; label = '半天缺'; }
@@ -2343,10 +2431,10 @@ const App = {
       `);
     }
 
-    const title = isWeekend ? `标记出勤 · ${s.name} (${month})` : `标记缺勤 · ${s.name} (${month})}`;
+    const title = isWeekend ? `标记出勤 · ${s.name} (${month})` : `标记缺勤 · ${s.name} (${month})`;
     const hint = isWeekend
-      ? '点击日期循环切换：<strong>缺勤 → 出勤 → 缺勤</strong>（周末托默认缺勤，标记出勤）'
-      : '点击日期循环切换：<strong>出勤 → 半天缺 → 全天缺 → 出勤</strong>（晚辅导/暑期班默认出勤）';
+      ? '点击日期切换：<strong>缺勤 → 出勤 → 缺勤</strong>（仅周末可标记，工作日不参与）'
+      : '点击日期切换：<strong>出勤 → 半天缺 → 全天缺 → 出勤</strong>（仅工作日可标记，周末不参与）';
 
     this.openModal(`
       <div class="modal-header">
@@ -2365,7 +2453,7 @@ const App = {
             <span><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--accent);margin-right:6px"></span>半天缺勤</span>
             <span><span class="dot dot-red"></span>全天缺勤</span>
           `}
-          <span style="color:var(--text-light)">灰色背景=周末</span>
+          <span style="color:var(--text-light)">灰色=不参与考勤</span>
         </div>
         <div id="absentSummary" style="margin-top:12px;padding:10px;background:var(--primary-light);border-radius:8px;font-size:13px"></div>
       </div>
@@ -2380,15 +2468,15 @@ const App = {
   },
 
   cycleStudentAbsentDay(el) {
+    // 跳过 disabled 日期
+    if (el.dataset.status === 'disabled') return;
     const cur = el.dataset.status || 'present';
     const attType = el.dataset.type;
     let next, cls, label;
     if (attType === 'weekend') {
-      // 周末托: absent → present → absent
       if (cur === 'absent') { next = 'present'; cls = 'present'; label = '出'; }
       else { next = 'absent'; cls = 'absent'; label = '缺'; }
     } else {
-      // 晚辅导/暑期班: present → half → absent → present
       if (cur === 'present') { next = 'half'; cls = 'half-absent'; label = '半天缺'; }
       else if (cur === 'half') { next = 'absent'; cls = 'absent'; label = '全天缺'; }
       else { next = 'present'; cls = ''; label = '出'; }
@@ -2401,9 +2489,11 @@ const App = {
 
   updateStudentAbsentSummary(attType) {
     const cells = $$('.absent-day-cell');
-    let present = 0, absent = 0, half = 0;
+    let present = 0, absent = 0, half = 0, valid = 0;
     cells.forEach(el => {
       const s = el.dataset.status;
+      if (s === 'disabled') return;
+      valid++;
       if (s === 'present') present++;
       else if (s === 'absent') absent++;
       else if (s === 'half') half++;
@@ -2411,10 +2501,10 @@ const App = {
     const el = $('#absentSummary');
     if (el) {
       if (attType === 'weekend') {
-        el.innerHTML = `出勤 <strong style="color:var(--success)">${present}</strong> 天，缺勤 <strong style="color:var(--text-light)">${absent}</strong> 天`;
+        el.innerHTML = `有效日期 <strong>${valid}</strong> 天 | 出勤 <strong style="color:var(--success)">${present}</strong> 天，缺勤 <strong style="color:var(--text-light)">${absent}</strong> 天`;
       } else {
         const totalAbsent = absent + half * 0.5;
-        el.innerHTML = `出勤 <strong style="color:var(--success)">${present}</strong> 天，全天缺勤 <strong style="color:var(--danger)">${absent}</strong> 天，半天缺勤 <strong style="color:var(--accent)">${half}</strong> 天，合计缺勤 <strong style="color:var(--danger)">${totalAbsent}</strong> 天`;
+        el.innerHTML = `有效日期 <strong>${valid}</strong> 天 | 出勤 <strong style="color:var(--success)">${present}</strong> 天，全天缺勤 <strong style="color:var(--danger)">${absent}</strong> 天，半天缺勤 <strong style="color:var(--accent)">${half}</strong> 天，合计缺勤 <strong style="color:var(--danger)">${totalAbsent}</strong> 天`;
       }
     }
   },
@@ -2422,6 +2512,7 @@ const App = {
   clearAllStudentAbsent() {
     const attType = $$('.absent-day-cell')[0]?.dataset.type;
     $$('.absent-day-cell').forEach(el => {
+      if (el.dataset.status === 'disabled') return;
       if (attType === 'weekend') {
         el.dataset.status = 'absent';
         el.classList.remove('present');
@@ -2443,16 +2534,15 @@ const App = {
     const month = this.state.currentMonth;
     if (!s.attendanceRecords) s.attendanceRecords = {};
     if (!s.attendanceRecords[month]) s.attendanceRecords[month] = {};
-    // 收集考勤记录
+    // 收集考勤记录 (跳过 disabled 日期)
     const records = {};
     $$('.absent-day-cell').forEach(el => {
+      if (el.dataset.status === 'disabled') return;
       const status = el.dataset.status;
       const date = el.dataset.date;
       if (attType === 'weekend') {
-        // 周末托: 只记录出勤的日期
         if (status === 'present') records[date] = 'present';
       } else {
-        // 晚辅导/暑期班: 只记录缺勤的日期
         if (status === 'absent' || status === 'half') records[date] = status;
       }
     });
@@ -3049,6 +3139,38 @@ const App = {
 
       <div class="card">
         <div class="card-header">
+          <div class="card-title"><span class="title-icon"></span>📅 项目日期范围</div>
+        </div>
+        <div class="highlight-box">
+          设置各项目的有效日期范围。空着表示全年有效。<br>
+          考勤只会标记<strong>日期范围内且匹配工作日/休息日</strong>的日期。
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">晚辅导日期范围 <span class="hint">仅工作日生效</span></label>
+            <div style="display:flex;gap:8px;align-items:center">
+              <input class="form-input" type="date" id="set_evening_start" value="${s.eveningDateStart||''}" style="flex:1">
+              <span>至</span>
+              <input class="form-input" type="date" id="set_evening_end" value="${s.eveningDateEnd||''}" style="flex:1">
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">寒暑期班日期范围 <span class="hint">仅工作日生效</span></label>
+            <div style="display:flex;gap:8px;align-items:center">
+              <input class="form-input" type="date" id="set_summer_start" value="${s.summerDateStart||''}" style="flex:1">
+              <span>至</span>
+              <input class="form-input" type="date" id="set_summer_end" value="${s.summerDateEnd||''}" style="flex:1">
+            </div>
+          </div>
+        </div>
+        <div class="form-hint" style="margin-top:8px">
+          💡 例如暑假班设为 2026-07-01 至 2026-08-31，则只在这段时间内标记工作日出勤，周末和范围外的日期不参与考勤。
+        </div>
+        <button class="btn btn-primary" onclick="App.saveSettings()">保存日期范围</button>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
           <div class="card-title"><span class="title-icon" style="background:#9333ea"></span>☁️ 云端同步 (Supabase)</div>
           ${DB.getCloudConfig().enabled ? '<span class="tag tag-green">已启用</span>' : '<span class="tag tag-gray">未启用</span>'}
         </div>
@@ -3153,6 +3275,10 @@ const App = {
     const d = DB.get();
     d.settings.orgName = $('#set_orgname').value.trim() || '博智托管';
     d.settings.defaultShareRate = Number($('#set_share').value)||60;
+    d.settings.eveningDateStart = $('#set_evening_start')?.value || '';
+    d.settings.eveningDateEnd = $('#set_evening_end')?.value || '';
+    d.settings.summerDateStart = $('#set_summer_start')?.value || '';
+    d.settings.summerDateEnd = $('#set_summer_end')?.value || '';
     DB.persist();
     toast('设置已保存');
     this.render();
@@ -3562,8 +3688,8 @@ ON CONFLICT (id) DO NOTHING;`;
   /* ====================================================================
    *  教师分享端 - 考勤管理
    *  规则: 
-   *    - 晚辅导/暑期班: 只有学生的年级固定老师可以标记缺勤
-   *    - 周末托: 所有老师都可以标记出勤
+   *    - 晚辅导/寒暑期班: 只有学生的年级固定老师可以标记缺勤 (仅工作日)
+   *    - 周末托: 所有老师都可以标记出勤 (仅休息日)
    * ================================================================== */
   viewShareAttendance() {
     const d = DB.get();
@@ -3575,8 +3701,9 @@ ON CONFLICT (id) DO NOTHING;`;
     const month = this.state.currentMonth;
     const [y, m] = month.split('-').map(Number);
     const daysInMonth = new Date(y, m, 0).getDate();
+    const settings = d.settings || {};
 
-    // 晚辅导/暑期班: 该老师是年级固定老师的学生
+    // 晚辅导/寒暑期班: 该老师是年级固定老师的学生
     const eveningSummerStudents = d.students.filter(s =>
       (s.enrollTypes||[]).some(et => et === 'evening' || et === 'summer') &&
       (s.gradeTeachers||[]).some(gt => gt.teacherId === t.id)
@@ -3587,21 +3714,46 @@ ON CONFLICT (id) DO NOTHING;`;
       (s.enrollTypes||[]).includes('weekend')
     );
 
+    const isValidAttDay = (dateStr, type) => {
+      if (type === 'evening_summer') {
+        const inEvening = inDateRange(dateStr, settings.eveningDateStart, settings.eveningDateEnd);
+        const inSummer = inDateRange(dateStr, settings.summerDateStart, settings.summerDateEnd);
+        return (inEvening || inSummer) && isWorkday(dateStr);
+      }
+      return isWeekendDay(dateStr);
+    };
+
+    const countValidDays = (type) => {
+      let count = 0;
+      for (let day = 1; day <= daysInMonth; day++) {
+        if (isValidAttDay(`${month}-${String(day).padStart(2,'0')}`, type)) count++;
+      }
+      return count;
+    };
+
     const getStudentAttendance = (s, type) => {
       return s.attendanceRecords?.[month]?.[type] || {};
     };
 
     const countStudentAtt = (s, type, defaultPresent) => {
       const records = getStudentAttendance(s, type);
-      const marked = Object.keys(records).length;
-      if (defaultPresent) {
-        const absent = Object.values(records).filter(v => v === 'absent').length;
-        const halfAbsent = Object.values(records).filter(v => v === 'half').length;
-        return { absent, halfAbsent, marked, present: daysInMonth - absent - halfAbsent };
-      } else {
-        const present = Object.values(records).filter(v => v === 'present').length;
-        return { present, absent: daysInMonth - present, marked };
+      const totalValid = countValidDays(type);
+      let absent = 0, halfAbsent = 0, present = 0, marked = 0;
+      for (let day = 1; day <= daysInMonth; day++) {
+        const dateStr = `${month}-${String(day).padStart(2,'0')}`;
+        if (!isValidAttDay(dateStr, type)) continue;
+        const status = records[dateStr];
+        if (defaultPresent) {
+          if (status === 'absent') absent++;
+          else if (status === 'half') { halfAbsent++; marked++; }
+          else present++;
+          if (status) marked++;
+        } else {
+          if (status === 'present') { present++; marked++; }
+          else absent++;
+        }
       }
+      return { absent, halfAbsent, marked, present, totalValid };
     };
 
     return `
@@ -3616,18 +3768,18 @@ ON CONFLICT (id) DO NOTHING;`;
         </div>
 
         <div class="stats-grid">
-          ${this.statCard('green','📚', eveningSummerStudents.length, '晚辅导/暑期班学生', '固定老师')}
+          ${this.statCard('green','📚', eveningSummerStudents.length, '晚辅导/寒暑期班学生', '固定老师')}
           ${this.statCard('orange','📅', weekendStudents.length, '周末托学生', '全员可标记')}
         </div>
       </div>
 
-      <!-- 晚辅导/暑期班 -->
+      <!-- 晚辅导/寒暑期班 -->
       <div class="card">
         <div class="card-header">
-          <div class="card-title"><span class="title-icon" style="background:#1890ff"></span>📚 晚辅导/暑期班 — 默认出勤，标记缺勤</div>
+          <div class="card-title"><span class="title-icon" style="background:#1890ff"></span>📚 晚辅导/寒暑期班 — 工作日出勤，标记缺勤</div>
         </div>
         <div class="highlight-box">
-          你是以下学生的<strong>年级固定老师</strong>，可为其标记缺勤。默认所有学生出勤。
+          你是以下学生的<strong>年级固定老师</strong>，可为其标记缺勤。仅工作日有效。
         </div>
         ${eveningSummerStudents.length ? `
           <div class="table-wrap">
@@ -3636,6 +3788,7 @@ ON CONFLICT (id) DO NOTHING;`;
                 <tr>
                   <th>学生</th>
                   <th>年级</th>
+                  <th>有效天数</th>
                   <th>出勤</th>
                   <th>缺勤</th>
                   <th>半天缺</th>
@@ -3650,6 +3803,7 @@ ON CONFLICT (id) DO NOTHING;`;
                   return `<tr>
                     <td><strong>${s.name}</strong> ${types}</td>
                     <td>${s.grade||'-'}</td>
+                    <td><strong>${att.totalValid}</strong></td>
                     <td><strong style="color:var(--success)">${att.present}</strong></td>
                     <td><strong style="color:${att.absent>0?'var(--danger)':'var(--text-light)'}">${att.absent}</strong></td>
                     <td><strong style="color:${att.halfAbsent>0?'var(--accent)':'var(--text-light)'}">${att.halfAbsent||0}</strong></td>
@@ -3661,16 +3815,16 @@ ON CONFLICT (id) DO NOTHING;`;
               </tbody>
             </table>
           </div>
-        ` : `<div class="empty-state"><div class="empty-state-icon">📚</div><div class="empty-state-text">暂无你作为固定老师的晚辅导/暑期班学生</div></div>`}
+        ` : `<div class="empty-state"><div class="empty-state-icon">📚</div><div class="empty-state-text">暂无你作为固定老师的晚辅导/寒暑期班学生</div></div>`}
       </div>
 
       <!-- 周末托 -->
       <div class="card">
         <div class="card-header">
-          <div class="card-title"><span class="title-icon" style="background:#fa8c16"></span>📅 周末托 — 默认缺勤，标记出勤</div>
+          <div class="card-title"><span class="title-icon" style="background:#fa8c16"></span>📅 周末托 — 休息日出勤，标记出勤</div>
         </div>
         <div class="highlight-box">
-          所有老师都可以标记周末托学生的出勤。默认所有学生缺勤，点击标记出勤。
+          所有老师都可以标记周末托学生的出勤。仅休息日（周六日）有效，工作日不参与。
         </div>
         ${weekendStudents.length ? `
           <div class="table-wrap">
@@ -3679,6 +3833,7 @@ ON CONFLICT (id) DO NOTHING;`;
                 <tr>
                   <th>学生</th>
                   <th>年级</th>
+                  <th>有效天数</th>
                   <th>已标记出勤</th>
                   <th>缺勤</th>
                   <th>操作</th>
@@ -3690,6 +3845,7 @@ ON CONFLICT (id) DO NOTHING;`;
                   return `<tr>
                     <td><strong>${s.name}</strong> <span class="tag tag-green">周末托</span></td>
                     <td>${s.grade||'-'}</td>
+                    <td><strong>${att.totalValid}</strong></td>
                     <td><strong style="color:var(--success)">${att.present}</strong></td>
                     <td><strong style="color:var(--text-light)">${att.absent}</strong></td>
                     <td>
@@ -3714,12 +3870,33 @@ ON CONFLICT (id) DO NOTHING;`;
     const daysInMonth = new Date(y, m, 0).getDate();
     const isWeekend = attType === 'weekend';
     const records = s.attendanceRecords?.[month]?.[attType] || {};
+    const settings = d.settings || {};
 
     const dayCells = [];
     for (let day = 1; day <= daysInMonth; day++) {
       const dateStr = `${month}-${String(day).padStart(2,'0')}`;
       const weekday = new Date(y, m-1, day).getDay();
       const isWeekendDay = weekday === 0 || weekday === 6;
+
+      let isValid = false;
+      if (isWeekend) {
+        isValid = isWeekendDay;
+      } else {
+        const inEvening = inDateRange(dateStr, settings.eveningDateStart, settings.eveningDateEnd);
+        const inSummer = inDateRange(dateStr, settings.summerDateStart, settings.summerDateEnd);
+        isValid = (inEvening || inSummer) && !isWeekendDay;
+      }
+
+      if (!isValid) {
+        dayCells.push(`
+          <div class="absent-day-cell disabled" data-date="${dateStr}" data-status="disabled" data-type="${attType}">
+            <div class="day-num">${day}</div>
+            <div class="day-status">-</div>
+          </div>
+        `);
+        continue;
+      }
+
       let status, cls, label;
       if (isWeekend) {
         status = records[dateStr] || 'absent';
@@ -3741,8 +3918,8 @@ ON CONFLICT (id) DO NOTHING;`;
 
     const title = isWeekend ? `标记出勤 · ${s.name} (${month})` : `标记缺勤 · ${s.name} (${month})`;
     const hint = isWeekend
-      ? '点击日期切换：<strong>缺勤 → 出勤 → 缺勤</strong>（周末托默认缺勤）'
-      : '点击日期切换：<strong>出勤 → 半天缺 → 全天缺 → 出勤</strong>（默认出勤）';
+      ? '点击日期切换：<strong>缺勤 → 出勤 → 缺勤</strong>（仅周末有效）'
+      : '点击日期切换：<strong>出勤 → 半天缺 → 全天缺 → 出勤</strong>（仅工作日有效）';
 
     this.openModal(`
       <div class="modal-header">
@@ -3761,7 +3938,7 @@ ON CONFLICT (id) DO NOTHING;`;
             <span><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--accent);margin-right:6px"></span>半天缺勤</span>
             <span><span class="dot dot-red"></span>全天缺勤</span>
           `}
-          <span style="color:var(--text-light)">灰色=周末</span>
+          <span style="color:var(--text-light)">灰色=不参与考勤</span>
         </div>
         <div id="absentSummary" style="margin-top:12px;padding:10px;background:var(--primary-light);border-radius:8px;font-size:13px"></div>
       </div>
@@ -3784,6 +3961,7 @@ ON CONFLICT (id) DO NOTHING;`;
     if (!s.attendanceRecords[month]) s.attendanceRecords[month] = {};
     const records = {};
     $$('.absent-day-cell').forEach(el => {
+      if (el.dataset.status === 'disabled') return;
       const status = el.dataset.status;
       const date = el.dataset.date;
       if (attType === 'weekend') {
@@ -3972,38 +4150,45 @@ ON CONFLICT (id) DO NOTHING;`;
       const month = this.state.currentMonth;
       const [y, m] = month.split('-').map(Number);
       const daysInMonth = new Date(y, m, 0).getDate();
+      const settings = d.settings || {};
       const header = ['学生','年级','类型'];
       for (let day = 1; day <= daysInMonth; day++) header.push(`${day}日`);
-      header.push('出勤天数','缺勤天数');
+      header.push('有效天数','出勤天数','缺勤天数');
       const rows = [header];
       d.students.forEach(s => {
-        // 晚辅导/暑期班
+        // 晚辅导/寒暑期班: 仅工作日有效
         if ((s.enrollTypes||[]).some(t => t === 'evening' || t === 'summer')) {
           const recs = s.attendanceRecords?.[month]?.evening_summer || {};
-          const row = [s.name, s.grade||'', '晚辅导/暑期班'];
-          let present = 0, absent = 0;
+          const row = [s.name, s.grade||'', '晚辅导/寒暑期班'];
+          let present = 0, absent = 0, validCount = 0;
           for (let day = 1; day <= daysInMonth; day++) {
             const ds = `${month}-${String(day).padStart(2,'0')}`;
+            const inEvening = inDateRange(ds, settings.eveningDateStart, settings.eveningDateEnd);
+            const inSummer = inDateRange(ds, settings.summerDateStart, settings.summerDateEnd);
+            if (!(inEvening || inSummer) || !isWorkday(ds)) { row.push(''); continue; }
+            validCount++;
             const status = recs[ds] || 'present';
             if (status === 'absent') { row.push('缺'); absent++; }
             else if (status === 'half') { row.push('半缺'); absent += 0.5; }
             else { row.push('出'); present++; }
           }
-          row.push(present, absent);
+          row.push(validCount, present, absent);
           rows.push(row);
         }
-        // 周末托
+        // 周末托: 仅休息日有效
         if ((s.enrollTypes||[]).includes('weekend')) {
           const recs = s.attendanceRecords?.[month]?.weekend || {};
           const row = [s.name, s.grade||'', '周末托'];
-          let present = 0, absent = 0;
+          let present = 0, absent = 0, validCount = 0;
           for (let day = 1; day <= daysInMonth; day++) {
             const ds = `${month}-${String(day).padStart(2,'0')}`;
+            if (!isWeekendDay(ds)) { row.push(''); continue; }
+            validCount++;
             const status = recs[ds] || 'absent';
             if (status === 'present') { row.push('出'); present++; }
             else { row.push('缺'); absent++; }
           }
-          row.push(present, absent);
+          row.push(validCount, present, absent);
           rows.push(row);
         }
       });
