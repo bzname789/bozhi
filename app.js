@@ -1407,6 +1407,7 @@ const App = {
       name:'', dept:'小学部', level:'初级教师', subject:'', phone:'',
       baseSalary: 0, perfBase: 0, shareRate: DB.get().settings.defaultShareRate,
       socialInsurance: 0, socialType: 'none', isAdmin: false, jobType: 'full', notes:'',
+      effectiveMonth: thisMonth(),  // 工资参数生效月份
     };
 
     this.openModal(`
@@ -1502,6 +1503,11 @@ const App = {
           </div>
         </div>
         <div class="form-group">
+          <label class="form-label">工资参数生效月份 <span class="hint">修改工资参数后，从哪个月开始生效</span></label>
+          <input class="form-input" type="month" id="tf_eff_month" value="${data.effectiveMonth||t?.effectiveMonth||thisMonth()}">
+          <div class="form-hint">⚠️ 修改工资参数（基本工资、绩效、分成等）仅对当月及以后生效，之前月份不受影响。社保另有独立生效月。</div>
+        </div>
+        <div class="form-group">
           <label class="form-label">备注</label>
           <textarea class="form-textarea" id="tf_notes">${data.notes||''}</textarea>
         </div>
@@ -1560,6 +1566,7 @@ const App = {
       socialType: $('#tf_social_type').value,
       socialInsurance: Number($('#tf_social').value)||0,
       socialEffectiveMonth: $('#tf_social_eff')?.value || thisMonth(),
+      effectiveMonth: $('#tf_eff_month')?.value || thisMonth(),
       isAdmin: $$('#tf_isadmin .radio-item.checked')[0]?.dataset.key === '1',
       notes: $('#tf_notes').value.trim(),
     };
@@ -1898,12 +1905,37 @@ const App = {
   /* ====================================================================
    *  工资计算引擎 (核心)
    * ================================================================== */
+  // 按生效月份取参数值: month>=生效月→用当前值, 否则向前查找历史 salaryRecords
+  getEffValue(t, month, key, currentVal, defaultVal) {
+    const rec = t.salaryRecords?.[month] || {};
+    // 如果本月有显式保存的值, 直接用
+    if (key in rec) return rec[key];
+    const effMonth = t.effectiveMonth || '2000-01';
+    if (month >= effMonth) return currentVal;
+    // 向前查找最近一次 salaryRecords 中的历史值
+    const allMonths = Object.keys(t.salaryRecords || {}).sort().reverse();
+    for (const m of allMonths) {
+      if (m < month && key in (t.salaryRecords[m] || {})) {
+        return t.salaryRecords[m][key];
+      }
+    }
+    return defaultVal;
+  },
+
   calcTeacherSalary(t, month) {
     const rec = t.salaryRecords?.[month] || {};
     const settings = DB.get().settings;
-    const jobType = t.jobType || 'full';
+
+    // ---- 按生效月份取各参数值 ----
+    const jobType = this.getEffValue(t, month, 'jobType', t.jobType || 'full', 'full');
     const isHourly = jobType === 'hourly';
     const isFullTime = jobType === 'full';
+    const baseSalary = this.getEffValue(t, month, 'baseSalary', Number(t.baseSalary) || 0, 0);
+    const perfBase = this.getEffValue(t, month, 'perfBase', Number(t.perfBase) || 0, 0);
+    const shareRate = this.getEffValue(t, month, 'shareRate', t.shareRate ?? settings.defaultShareRate, settings.defaultShareRate);
+    const hourlyRate = this.getEffValue(t, month, 'hourlyRate', Number(t.hourlyRate) || 0, 0);
+    const dailyHours = this.getEffValue(t, month, 'dailyHours', Number(t.dailyHours) || 8, 8);
+    const isAdmin = this.getEffValue(t, month, 'isAdmin', t.isAdmin || false, false);
 
     const shouldDays = rec.shouldDays ?? 22;
     // 缺勤记录: absentDays 存日期字符串, absentHalfDays 存半天日期
@@ -1959,8 +1991,6 @@ const App = {
 
     if (isHourly) {
       // ===== 时薪制兼职: 工资 = 时薪 × 实际出勤工时 =====
-      const hourlyRate = Number(t.hourlyRate) || 0;
-      const dailyHours = Number(t.dailyHours) || 8;
       const actualHours = actualDays * dailyHours;
       const hourlySalary = Math.round(hourlyRate * actualHours * 100) / 100;
 
@@ -1968,11 +1998,10 @@ const App = {
       const logs = DB.get().hourLogs.filter(l =>
         l.teacherId === t.id && l.date.startsWith(month)
       );
-      const shareRate = t.shareRate ?? settings.defaultShareRate;
       let courseFee = 0;
       logs.forEach(l => { courseFee += l.hours * (l.unitPrice||0) * shareRate / 100; });
 
-      const postBonus = t.isAdmin ? (rec.postBonus || 200) : (rec.postBonus || 0);
+      const postBonus = isAdmin ? (rec.postBonus || 200) : (rec.postBonus || 0);
       const transportBonus = rec.transportBonus || 0;
 
       const total = hourlySalary + courseFee + postBonus + transportBonus
@@ -1992,8 +2021,6 @@ const App = {
 
     // ===== 全职/兼职: 原有逻辑 =====
     const perfScore = rec.perfScore ?? 80;
-    const baseSalary = Number(t.baseSalary) || 0;
-    const perfBase = Number(t.perfBase) || 0;
     const perfSalary = Math.round(perfBase * perfScore / 100 * 100) / 100;
 
     // 请假扣除工资 = 基本工资 / 应出勤天数 × 请假天数
@@ -2011,11 +2038,10 @@ const App = {
     const logs = DB.get().hourLogs.filter(l =>
       l.teacherId === t.id && l.date.startsWith(month)
     );
-    const shareRate = t.shareRate ?? settings.defaultShareRate;
     let courseFee = 0;
     logs.forEach(l => { courseFee += l.hours * (l.unitPrice||0) * shareRate / 100; });
 
-    const postBonus = t.isAdmin ? (rec.postBonus || 200) : (rec.postBonus || 0);
+    const postBonus = isAdmin ? (rec.postBonus || 200) : (rec.postBonus || 0);
     const transportBonus = rec.transportBonus || 0;
 
     const total = baseSalary + perfSalary + fullAttendBonus + perfAllowance
