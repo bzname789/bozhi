@@ -811,9 +811,9 @@ const App = {
     const teacherHours = data.teacherHours || [];
     const gradeTeachers = data.gradeTeachers || [];
 
-    // 构建教师选项
+    // 构建教师选项 (过滤离职教师)
     const d = DB.get();
-    const teacherOpts = d.teachers.map(t => `<option value="${t.id}">${t.name} · ${t.subject||'未设科目'} (${t.dept||''})</option>`).join('');
+    const teacherOpts = d.teachers.filter(t=>t.status!=='disabled').map(t => `<option value="${t.id}">${t.name} · ${t.subject||'未设科目'} (${t.dept||''})</option>`).join('');
 
     // 生成每个报名类型对应的费用输入区
     const feeInputs = ENROLL_TYPES.map(t => {
@@ -1353,6 +1353,10 @@ const App = {
     const d = DB.get();
     let list = d.teachers;
     if (this.state.filterDept) list = list.filter(t=>t.dept===this.state.filterDept);
+    // 搜索 + 离职教师排到列表末尾
+    list = list.filter(t => !this.state.search || t.name.includes(this.state.search) || (t.subject||'').includes(this.state.search));
+    list = [...list.filter(t => t.status !== 'disabled'), ...list.filter(t => t.status === 'disabled')];
+    const disabledCount = d.teachers.filter(t=>t.status==='disabled').length;
 
     return `
       <div class="card">
@@ -1369,26 +1373,30 @@ const App = {
             <option value="">全部部门</option>
             ${DEPTS.map(d=>`<option value="${d}" ${this.state.filterDept===d?'selected':''}>${d}</option>`).join('')}
           </select>
-          <div style="margin-left:auto;font-size:12px;color:var(--text-light)">共 ${list.length} 名</div>
+          <div style="margin-left:auto;font-size:12px;color:var(--text-light)">在职 ${list.length - list.filter(t=>t.status==='disabled').length} 名${disabledCount?` · 已离职 ${disabledCount} 名`:''}</div>
         </div>
         <div class="table-wrap">
           <table>
             <thead><tr><th>姓名</th><th>部门</th><th>类型</th><th>职级</th><th>科目</th><th>分成比例</th><th>本月工资</th><th>操作</th></tr></thead>
             <tbody>
-              ${list.length ? list.filter(t => !this.state.search || t.name.includes(this.state.search) || (t.subject||'').includes(this.state.search)).map(t => {
+              ${list.length ? list.map(t => {
                 const sal = this.calcTeacherSalary(t, this.state.currentMonth);
-                return `<tr>
-                  <td><strong>${t.name}</strong>${t.isAdmin?'<span class="tag tag-orange">管理岗</span>':''}</td>
+                const isDisabled = t.status === 'disabled';
+                return `<tr ${isDisabled?'style="opacity:0.55"':''}>
+                  <td><strong>${t.name}</strong>${t.isAdmin?'<span class="tag tag-orange">管理岗</span>':''}${isDisabled?'<span class="tag tag-gray">已离职</span>':''}</td>
                   <td>${t.dept||'-'}</td>
                   <td>${(t.jobType||'full')==='full'?'<span class="tag tag-green">全职</span>':(t.jobType==='hourly'?'<span class="tag tag-cyan">时薪</span>':'<span class="tag tag-gray">兼职</span>')}</td>
                   <td>${t.level||'-'}</td>
                   <td>${t.subject||'-'}</td>
                   <td>${t.shareRate||DB.get().settings.defaultShareRate}%</td>
-                  <td><strong style="color:var(--primary)">${fmtMoney(sal.total)}</strong></td>
+                  <td>${sal.inactive ? `<span style="color:var(--text-light)">— ${sal.inactiveLabel}</span>` : `<strong style="color:var(--primary)">${fmtMoney(sal.total)}</strong>`}</td>
                   <td class="action-cell">
                     <button class="btn btn-ghost btn-sm" onclick="App.openTeacherDetail('${t.id}')">详情</button>
                     <button class="btn btn-ghost btn-sm" onclick="App.openTeacherForm('${t.id}')">编辑</button>
-                    <button class="btn btn-ghost btn-sm" style="color:#34a853" onclick="App.openShareManager('${t.id}')" title="消课分享链接">🔗 分享</button>
+                    ${isDisabled
+                      ? `<button class="btn btn-ghost btn-sm" style="color:var(--success)" onclick="App.openTeacherEnable('${t.id}')" title="从启用月起核算工资">✅ 启用</button>`
+                      : `<button class="btn btn-ghost btn-sm" style="color:#34a853" onclick="App.openShareManager('${t.id}')" title="消课分享链接">🔗 分享</button>
+                         <button class="btn btn-ghost btn-sm" style="color:#d97706" onclick="App.openTeacherDisable('${t.id}')" title="离职停薪">🚫 禁用</button>`}
                     <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="App.delTeacher('${t.id}')">删除</button>
                   </td>
                 </tr>`;
@@ -1628,6 +1636,93 @@ const App = {
     this.render();
   },
 
+  /* ---- 教师禁用(离职) / 启用(复职) ---- */
+  openTeacherDisable(id) {
+    const t = DB.get().teachers.find(x=>x.id===id);
+    if (!t) return;
+    const m = this.state.currentMonth;
+    this.openModal(`
+      <div class="modal-header">
+        <div class="modal-title">禁用教师 · ${t.name}</div>
+        <button class="modal-close" data-close-modal>×</button>
+      </div>
+      <div class="modal-body">
+        <div class="highlight-box" style="background:#fef2f2;border-color:#fecaca;color:#b91c1c">
+          🚫 设置后，该教师从离职月份起<strong>不再核算工资</strong>，也不出现在消课、考勤名单中。历史月份工资不受影响。
+        </div>
+        <div class="form-group">
+          <label class="form-label">离职月份 <span class="hint">该月起不再核算工资</span></label>
+          <input class="form-input" type="month" id="td_disable_month" value="${m}">
+          <div class="form-hint">如离职当月仍需结算工资，请选择下一个月</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-close-modal>取消</button>
+        <button class="btn btn-primary" style="background:var(--danger)" onclick="App.saveTeacherDisable('${t.id}')">确认禁用</button>
+      </div>
+    `);
+  },
+
+  saveTeacherDisable(id) {
+    const t = DB.get().teachers.find(x=>x.id===id);
+    if (!t) return;
+    t.status = 'disabled';
+    t.disabledFrom = $('#td_disable_month').value || thisMonth();
+    DB.persist();
+    this.closeModal();
+    toast(`${t.name} 已禁用，${t.disabledFrom} 起不再核算工资`);
+    this.render();
+  },
+
+  openTeacherEnable(id) {
+    const t = DB.get().teachers.find(x=>x.id===id);
+    if (!t) return;
+    const m = this.state.currentMonth;
+    this.openModal(`
+      <div class="modal-header">
+        <div class="modal-title">启用教师 · ${t.name}</div>
+        <button class="modal-close" data-close-modal>×</button>
+      </div>
+      <div class="modal-body">
+        <div class="highlight-box">
+          ✅ 设置后，该教师从启用月份起<strong>恢复核算工资</strong>，启用之前的月份不计工资。
+        </div>
+        <div class="form-group">
+          <label class="form-label">启用月份 <span class="hint">该月起开始核算工资，之前不计</span></label>
+          <input class="form-input" type="month" id="td_enable_month" value="${m}">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-close-modal>取消</button>
+        <button class="btn btn-primary" style="background:var(--success)" onclick="App.saveTeacherEnable('${t.id}')">确认启用</button>
+      </div>
+    `);
+  },
+
+  saveTeacherEnable(id) {
+    const t = DB.get().teachers.find(x=>x.id===id);
+    if (!t) return;
+    const m = $('#td_enable_month').value || thisMonth();
+    if (t.status === 'disabled' && t.disabledFrom) {
+      if (m > t.disabledFrom) {
+        // 复职月晚于离职月: 记录离职空档 (该期间不核算工资)
+        t.leaveGaps = t.leaveGaps || [];
+        t.leaveGaps.push([t.disabledFrom, m]);
+        t.activeFrom = m;
+      } else {
+        // 复职月不晚于离职月: 视为在职未中断, 清除离职标记
+        t.disabledFrom = '';
+      }
+    } else {
+      t.activeFrom = m;
+    }
+    t.status = 'active';
+    DB.persist();
+    this.closeModal();
+    toast(`${t.name} 已启用，${t.activeFrom || '当月'} 起开始核算工资`);
+    this.render();
+  },
+
   toggleTeacherSocialType() {
     const type = $('#tf_social_type').value;
     const label = $('#tf_social_label');
@@ -1658,7 +1753,8 @@ const App = {
     if (this.state.detailTab === 'info') {
       body = `
         <div class="info-list">
-          <div class="info-item"><span class="info-label">姓名</span><span class="info-value">${t.name}</span></div>
+          <div class="info-item"><span class="info-label">姓名</span><span class="info-value">${t.name}${t.status==='disabled'?' <span class="tag tag-gray">已离职</span>':' <span class="tag tag-green">在职</span>'}</span></div>
+          <div class="info-item"><span class="info-label">在职区间</span><span class="info-value">${t.activeFrom?`${t.activeFrom} 起`:''}${t.status==='disabled'&&t.disabledFrom?` · ${t.disabledFrom} 离职`:(t.disabledFrom&&t.activeFrom?` · 曾于 ${t.disabledFrom} 离职后复职`:'')}</span></div>
           <div class="info-item"><span class="info-label">部门</span><span class="info-value">${t.dept||'-'}</span></div>
           <div class="info-item"><span class="info-label">职级</span><span class="info-value">${t.level||'-'}</span></div>
           <div class="info-item"><span class="info-label">科目</span><span class="info-value">${t.subject||'-'}</span></div>
@@ -1759,6 +1855,14 @@ const App = {
   renderTeacherSalaryDetail(t, sal) {
     const isFullTime = (t.jobType || 'full') === 'full';
     const isHourly = t.jobType === 'hourly';
+    if (sal.inactive) {
+      return `
+        <div class="highlight-box" style="background:#f3f4f6;border-color:#d1d5db;color:#4b5563">
+          ⏸️ ${this.state.currentMonth} 该教师${sal.inactiveLabel}，当月不核算工资。
+          ${sal.inactiveLabel==='已离职'?`（自 ${t.disabledFrom||'-'} 起离职）`:`（${t.activeFrom||'-'} 起入职）`}
+          切换到其他月份可查看在职期间的历史工资。
+        </div>`;
+    }
     return `
       <div class="highlight-box">
         当前结算月份: ${this.state.currentMonth} | ${isHourly?'⏱️ 时薪制':(isFullTime?'全职':'兼职')} | 修改月份请到「工资结算」页面
@@ -1957,7 +2061,38 @@ const App = {
     return currentVal;
   },
 
+  // 教师在某月是否在职 (核算工资的前提)
+  // activeFrom: 启用(入职/复职)月; disabledFrom: 最近一次离职月; leaveGaps: 历史离职空档
+  isEmployedInMonth(t, month) {
+    const activeFrom = t.activeFrom || '2000-01';
+    const disabledFrom = t.disabledFrom || '';
+    const rehired = disabledFrom && activeFrom > disabledFrom;  // 复职: 复职月晚于离职月
+    // 未入职: 仅"从未复职过"的教师才受入职月限制 (复职教师 activeFrom 之前还有第一次在职期)
+    if (!rehired && !(t.leaveGaps||[]).length && month < activeFrom) return false;
+    // 历史离职空档不核算 (复职时记录的旧离职期间)
+    if ((t.leaveGaps||[]).some(([s,e]) => month >= s && month < e)) return false;
+    // 当前离职待复职的空档不核算
+    if (rehired && month >= disabledFrom && month < activeFrom) return false;
+    // 已离职: 离职月起不核算
+    if (t.status === 'disabled' && disabledFrom && month >= disabledFrom) return false;
+    return true;
+  },
+
   calcTeacherSalary(t, month) {
+    // 不在职 (离职 / 未入职): 不核算工资, 返回全 0 并带标记
+    if (!this.isEmployedInMonth(t, month)) {
+      return {
+        inactive: true,
+        inactiveLabel: month < (t.activeFrom || '2000-01') ? '未入职' : '已离职',
+        jobType: t.jobType || 'full',
+        shouldDays: 0, actualDays: 0, absentCount: 0, actualHours: 0,
+        hourlyRate: 0, hourlySalary: 0, baseSalary: 0, perfBase: 0,
+        perfSalary: 0, perfScore: 0, fullAttendBonus: 0, perfAllowance: 0,
+        courseFee: 0, postBonus: 0, transportBonus: 0,
+        socialType: 'none', socialAmount: 0, socialDeduction: 0, socialSubsidy: 0,
+        socialInsurance: 0, leaveDeduction: 0, total: 0,
+      };
+    }
     const rec = t.salaryRecords?.[month] || {};
     const settings = DB.get().settings;
 
@@ -2100,8 +2235,9 @@ const App = {
    * ================================================================== */
   viewAttendance() {
     const d = DB.get();
-    const teachers = d.teachers;
     const month = this.state.currentMonth;
+    // 教师考勤只显示当月在职的教师 (离职/未入职不参与考勤)
+    const teachers = d.teachers.filter(t => this.isEmployedInMonth(t, month));
     const [y, m] = month.split('-').map(Number);
     const daysInMonth = new Date(y, m, 0).getDate();
     const tab = this.state.attendanceTab || 'teacher';
@@ -2672,6 +2808,8 @@ const App = {
       return { t, sal };
     });
     const grandTotal = rows.reduce((s,r)=>s+r.sal.total, 0);
+    const activeCount = rows.filter(r => !r.sal.inactive).length;
+    const inactiveRows = rows.filter(r => r.sal.inactive);
 
     return `
       <div class="card">
@@ -2685,7 +2823,7 @@ const App = {
         </div>
 
         <div class="highlight-box">
-          结算月份: <strong>${month}</strong> | 教师数: ${teachers.length} | 工资合计: <strong>${fmtMoney(grandTotal)}</strong>
+          结算月份: <strong>${month}</strong> | 在职核算: ${activeCount} 人${inactiveRows.length?` | 当月不核算: ${inactiveRows.map(r=>`${r.t.name}(${r.sal.inactiveLabel})`).join('、')}`:''} | 工资合计: <strong>${fmtMoney(grandTotal)}</strong>
         </div>
 
         <div class="table-wrap">
@@ -2709,6 +2847,17 @@ const App = {
             <tbody>
               ${rows.length ? rows.map(({t,sal}) => {
                 const isHourly = t.jobType === 'hourly';
+                if (sal.inactive) {
+                  return `
+                  <tr style="opacity:0.5">
+                    <td><strong>${t.name}</strong> <span class="tag tag-gray">${sal.inactiveLabel}</span><br><span style="font-size:11px;color:var(--text-light)">${t.dept||''} · ${sal.inactiveLabel==='已离职'?`自 ${t.disabledFrom} 起离职`:`${t.activeFrom} 入职`}</span></td>
+                    <td colspan="10" style="color:var(--text-light)">当月${sal.inactiveLabel}，不核算工资</td>
+                    <td><strong style="color:var(--text-light)">—</strong></td>
+                    <td>
+                      <button class="btn btn-ghost btn-sm" onclick="App.openTeacherDetail('${t.id}')">详情</button>
+                    </td>
+                  </tr>`;
+                }
                 return `
                 <tr>
                   <td><strong>${t.name}</strong><br><span style="font-size:11px;color:var(--text-light)">${t.dept} · ${isHourly?'时薪':(t.level||'')} ${isHourly?`(${fmtMoney(t.hourlyRate)}/h)`:''}</span></td>
@@ -2858,9 +3007,13 @@ const App = {
       return all.length ? all : d.teachers.map(t => ({ id: t.id, name: t.name, rate: t.shareRate || d.settings.defaultShareRate, hours: stu.remainHours||0 }));
     };
 
-    // 初始教师列表
-    const initTeachers = preStudent ? getBoundTeachers(preStudent) : [];
-    const preTeacher = initTeachers.length ? initTeachers[0].id : (d.teachers[0]?.id || '');
+    // 初始教师列表 (过滤离职教师)
+    const notDisabled = (x) => {
+      const full = d.teachers.find(tt=>tt.id===x.id);
+      return !full || full.status !== 'disabled';
+    };
+    const initTeachers = (preStudent ? getBoundTeachers(preStudent) : []).filter(notDisabled);
+    const preTeacher = initTeachers.length ? initTeachers[0].id : (d.teachers.find(t=>t.status!=='disabled')?.id || '');
 
     const pf = s?.projectFees?.private || {};
     const initHours = initTeachers.length ? initTeachers[0].hours : 0;
@@ -2947,6 +3100,11 @@ const App = {
         teachers = all.length ? all : d.teachers.map(t => ({ id: t.id, name: t.name, rate: t.shareRate || d.settings.defaultShareRate, hours: s.remainHours||0 }));
       }
     }
+    // 过滤离职教师 (离职后不可再消课)
+    teachers = (teachers || []).filter(x => {
+      const full = d.teachers.find(tt=>tt.id===x.id);
+      return !full || full.status !== 'disabled';
+    });
     const sel = $('#cf_teacher');
     if (sel) {
       sel.innerHTML = teachers.map(t => `<option value="${t.id}">${t.name} (${t.rate}%) 剩${t.hours}</option>`).join('');
@@ -4211,10 +4369,11 @@ ON CONFLICT (id) DO NOTHING;`;
     }
 
     if (type === 'teachers' || type === 'all') {
-      const rows = [['姓名','部门','类型','职级','科目','电话','基本工资','绩效基数','小课分成(%)','时薪(元/h)','每日工时','社保','管理岗','备注']];
+      const rows = [['姓名','状态','部门','类型','职级','科目','电话','基本工资','绩效基数','小课分成(%)','时薪(元/h)','每日工时','社保','管理岗','备注']];
       d.teachers.forEach(t => {
         rows.push([
-          t.name, t.dept||'', (t.jobType||'full')==='full'?'全职':(t.jobType==='hourly'?'时薪制':'兼职'), t.level||'', t.subject||'', t.phone||'',
+          t.name, t.status==='disabled'?`已离职(${t.disabledFrom||''})`:(t.activeFrom?`在职(${t.activeFrom}起)`:'在职'),
+          t.dept||'', (t.jobType||'full')==='full'?'全职':(t.jobType==='hourly'?'时薪制':'兼职'), t.level||'', t.subject||'', t.phone||'',
           t.baseSalary||0, t.perfBase||0, t.shareRate||d.settings.defaultShareRate,
           t.hourlyRate||0, t.dailyHours||8,
           t.socialType==='pay'?'缴纳'+(t.socialInsurance||0):'不缴纳'+(t.socialInsurance||0),
@@ -4307,6 +4466,10 @@ ON CONFLICT (id) DO NOTHING;`;
       d.teachers.forEach(t => {
         const sal = this.calcTeacherSalary(t, month);
         const isHourly = t.jobType === 'hourly';
+        if (sal.inactive) {
+          rows.push([`${t.name}(${sal.inactiveLabel}·不核算)`, t.dept||'', '', t.level||'','','','','','','','','','','','','','',0,month]);
+          return;
+        }
         rows.push([
           t.name, t.dept||'', (t.jobType||'full')==='full'?'全职':(t.jobType==='hourly'?'时薪制':'兼职'), t.level||'',
           isHourly ? (t.hourlyRate||0)+'元/h' : sal.baseSalary,
