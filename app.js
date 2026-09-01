@@ -1574,7 +1574,12 @@ const App = {
     const id = this.state.editingTeacherId;
     if (id) {
       const idx = d.teachers.findIndex(x=>x.id===id);
-      if (idx>-1) d.teachers[idx] = {...d.teachers[idx], ...obj};
+      if (idx>-1) {
+        // 保存前先把旧值快照进 salaryRecords, 否则旧值会被覆盖丢失,
+        // 导致生效月之前的月份工资计算回退找不到历史值
+        this.snapshotOldParams(d.teachers[idx], obj);
+        d.teachers[idx] = {...d.teachers[idx], ...obj};
+      }
     } else {
       obj.id = uid();
       obj.createdAt = new Date().toISOString();
@@ -1584,6 +1589,34 @@ const App = {
     this.closeModal();
     toast('保存成功');
     this.render();
+  },
+
+  // 教师参数变更时, 把旧值快照写入 salaryRecords[旧生效月]
+  // 这样生效月之前的历史月份可通过"向前查找"取到变更前的参数
+  snapshotOldParams(old, obj) {
+    const settings = DB.get().settings;
+    const defaults = { baseSalary:0, perfBase:0, shareRate:settings.defaultShareRate, hourlyRate:0, dailyHours:8, isAdmin:false, jobType:'full' };
+    const norm = (k, v) => v ?? defaults[k];
+    const keys = ['baseSalary','perfBase','shareRate','hourlyRate','dailyHours','isAdmin','jobType'];
+    old.salaryRecords = old.salaryRecords || {};
+    // 工资参数有变化 → 旧值快照到旧生效月
+    const changed = keys.some(k => norm(k, old[k]) !== norm(k, obj[k]));
+    if (changed) {
+      const m = old.effectiveMonth || '2000-01';
+      const rec = old.salaryRecords[m] = old.salaryRecords[m] || {};
+      keys.forEach(k => { if (!(k in rec)) rec[k] = norm(k, old[k]); });
+    }
+    // 社保有独立生效月, 单独快照
+    const socChanged = (old.socialType||'none') !== (obj.socialType||'none')
+      || (old.socialInsurance||0) !== (obj.socialInsurance||0);
+    if (socChanged) {
+      const m = old.socialEffectiveMonth || '2000-01';
+      const rec = old.salaryRecords[m] = old.salaryRecords[m] || {};
+      if (!('socialType' in rec)) {
+        rec.socialType = old.socialType || 'none';
+        rec.socialInsurance = old.socialInsurance || 0;
+      }
+    }
   },
 
   delTeacher(id) {
@@ -1633,6 +1666,7 @@ const App = {
           <div class="info-item"><span class="info-label">基本工资</span><span class="info-value">${fmtMoney(t.baseSalary)}</span></div>
           <div class="info-item"><span class="info-label">绩效基数</span><span class="info-value">${fmtMoney(t.perfBase)}</span></div>
           <div class="info-item"><span class="info-label">小课分成</span><span class="info-value">${t.shareRate||DB.get().settings.defaultShareRate}%</span></div>
+          <div class="info-item"><span class="info-label">工资参数生效月</span><span class="info-value">${t.effectiveMonth||'初始'} 起 <span class="hint">之前月份沿用历史值</span></span></div>
           <div class="info-item"><span class="info-label">社保</span><span class="info-value">${t.socialType==='pay'?`缴纳 (扣${fmtMoney(t.socialInsurance)})`:t.socialType==='none'?`不缴纳 ${t.socialInsurance>0?'(补贴'+fmtMoney(t.socialInsurance)+')':'(无补贴)'}`:'未设置'} · 自 ${t.socialEffectiveMonth||'初始'} 起生效</span></div>
           <div class="info-item"><span class="info-label">岗位</span><span class="info-value">${t.isAdmin?'管理岗':'普通教师'}</span></div>
           <div class="info-item"><span class="info-label">教师类型</span><span class="info-value">${(t.jobType||'full')==='full'?'全职':(t.jobType==='hourly'?'时薪制':'兼职')} ${(t.jobType||'full')==='part'?'<span class="tag tag-gray">无全勤奖</span>':(t.jobType==='hourly'?'<span class="tag tag-cyan">按时薪算</span>':'<span class="tag tag-green">享全勤奖</span>')}</span></div>
@@ -1919,7 +1953,8 @@ const App = {
         return t.salaryRecords[m][key];
       }
     }
-    return defaultVal;
+    // 兜底: 历史快照缺失时用当前值 (旧值已丢失时宁可沿用新值, 不能归零)
+    return currentVal;
   },
 
   calcTeacherSalary(t, month) {
