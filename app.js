@@ -1671,10 +1671,9 @@ const App = {
             <input class="form-input" type="number" id="tf_daily_hours" value="${data.dailyHours||8}" placeholder="如 8">
           </div>
         </div>
-          <div class="form-group">
-            <label class="form-label">小课分成比例 (%)<span class="hint">教师拿的比例</span></label>
-            <input class="form-input" type="number" id="tf_share" value="${data.shareRate||DB.get().settings.defaultShareRate}" min="0" max="100">
-          </div>
+        <div class="form-group">
+          <label class="form-label">小课分成比例 (%)<span class="hint">教师拿的比例</span></label>
+          <input class="form-input" type="number" id="tf_share" value="${data.shareRate||DB.get().settings.defaultShareRate}" min="0" max="100">
         </div>
         <div class="form-group">
           <label class="form-label">社保</label>
