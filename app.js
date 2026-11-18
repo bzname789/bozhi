@@ -2916,20 +2916,34 @@ const App = {
    * ================================================================== */
   viewSalary() {
     const d = DB.get();
-    const teachers = d.teachers;
     const month = this.state.currentMonth;
 
-    const rows = teachers.map(t => {
+    // 名单规则同教师管理页: 表头筛选(部门/类型/状态) + 排序(在职全职初中部前置, 已离职最后)
+    let list = d.teachers;
+    if (this.state.filterDept) list = list.filter(t=>t.dept===this.state.filterDept);
+    if (this.state.filterJobType) list = list.filter(t => (t.jobType||'full')===this.state.filterJobType);
+    if (this.state.filterStatus) list = list.filter(t => (t.status==='disabled'?'disabled':'active')===this.state.filterStatus);
+    const rank = (t) => {
+      const disabled = t.status === 'disabled' ? 1 : 0;
+      const full = (t.jobType||'full') === 'full' ? 0 : 1;
+      const dept = t.dept === '初中部' ? 0 : 1;
+      return disabled * 100 + full * 10 + dept;
+    };
+    list = [...list].sort((a,b) => rank(a) - rank(b));
+
+    const rows = list.map(t => {
       const sal = this.calcTeacherSalary(t, month);
       return { t, sal };
     });
-    const grandTotal = rows.reduce((s,r)=>s+r.sal.total, 0);
-    const activeCount = rows.filter(r => !r.sal.inactive).length;
-    const inactiveRows = rows.filter(r => r.sal.inactive);
+    // 合计/统计始终基于全部教师, 不受筛选影响
+    const allRows = d.teachers.map(t => ({ t, sal: this.calcTeacherSalary(t, month) }));
+    const grandTotal = allRows.reduce((s,r)=>s+r.sal.total, 0);
+    const activeCount = allRows.filter(r => !r.sal.inactive).length;
+    const inactiveRows = allRows.filter(r => r.sal.inactive);
     // 教师确认反馈
     const acks = d.salaryAcks?.[month] || {};
     const ackedSet = new Set(Object.keys(acks));
-    const ackedActive = rows.filter(r => !r.sal.inactive && ackedSet.has(r.t.id)).length;
+    const ackedActive = allRows.filter(r => !r.sal.inactive && ackedSet.has(r.t.id)).length;
 
     return `
       <div class="card">
@@ -2953,7 +2967,23 @@ const App = {
           <table>
             <thead>
               <tr>
-                <th>教师</th>
+                <th>教师
+                  <select class="th-filter" onchange="App.state.filterDept=this.value; App.render()">
+                    <option value="">全部部门</option>
+                    ${DEPTS.map(dp=>`<option value="${dp}" ${this.state.filterDept===dp?'selected':''}>${dp}</option>`).join('')}
+                  </select>
+                  <select class="th-filter" onchange="App.state.filterJobType=this.value; App.render()">
+                    <option value="">全部类型</option>
+                    <option value="full" ${this.state.filterJobType==='full'?'selected':''}>全职</option>
+                    <option value="hourly" ${this.state.filterJobType==='hourly'?'selected':''}>时薪</option>
+                    <option value="part" ${this.state.filterJobType==='part'?'selected':''}>兼职</option>
+                  </select>
+                  <select class="th-filter" onchange="App.state.filterStatus=this.value; App.render()">
+                    <option value="">在职+离职</option>
+                    <option value="active" ${this.state.filterStatus==='active'?'selected':''}>仅在职</option>
+                    <option value="disabled" ${this.state.filterStatus==='disabled'?'selected':''}>仅离职</option>
+                  </select>
+                </th>
                 <th>基本工资</th>
                 <th>绩效工资</th>
                 <th>全勤奖</th>
