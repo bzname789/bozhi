@@ -15,6 +15,7 @@ const DB = (() => {
     logs: [],            // 操作日志 [{id, ts, device, source, action}] 上限500条
     confirmedMonths: [], // 已确认发薪(锁定)的月份 ['2026-11', ...]
     salaryAcks: {},      // 教师工资确认反馈 { '2026-11': { teacherId: 确认时间ISO } }
+    recycleBin: [],      // 回收站 [{...原档案, _deletedAt, _type}] 上限50条
     settings: {
       orgName: '博智托管',
       // 默认分成比例: 教师拿 60%, 托管 40%
@@ -34,7 +35,7 @@ const DB = (() => {
       if (!raw) { cache = JSON.parse(JSON.stringify(defaults)); save(); }
       else cache = JSON.parse(raw);
       // 容错
-      ['students','teachers','hourLogs','payments','teacherShares','logs','confirmedMonths'].forEach(k => {
+      ['students','teachers','hourLogs','payments','teacherShares','logs','confirmedMonths','recycleBin'].forEach(k => {
         if (!Array.isArray(cache[k])) cache[k] = [];
       });
       if (!cache.salaryAcks || typeof cache.salaryAcks !== 'object') cache.salaryAcks = {};
@@ -718,7 +719,10 @@ const App = {
       <div class="card">
         <div class="card-header">
           <div class="card-title"><span class="title-icon"></span>学生列表</div>
-          <button class="btn btn-primary" onclick="App.openStudentForm()">➕ 新增学生</button>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-secondary btn-sm" onclick="App.openRecycleBin()">🗑️ 回收站</button>
+            <button class="btn btn-primary" onclick="App.openStudentForm()">➕ 新增学生</button>
+          </div>
         </div>
         <div class="toolbar">
           <div class="search-box">
@@ -1231,13 +1235,85 @@ const App = {
   },
 
   delStudent(id) {
-    if (!confirm('确认删除该学生？相关缴费记录会保留但不再显示学生名。')) return;
+    if (!confirm('确认删除该学生？档案会移入回收站，可随时恢复。')) return;
     const d = DB.get();
-    this.addLog('删除学生: ' + (d.students.find(x=>x.id===id)?.name || ''));
+    const s = d.students.find(x=>x.id===id);
+    // 删除前快照进回收站 (保留完整档案, 可恢复)
+    if (s) {
+      d.recycleBin = d.recycleBin || [];
+      d.recycleBin.unshift({...JSON.parse(JSON.stringify(s)), _deletedAt: new Date().toISOString(), _type: 'student'});
+      if (d.recycleBin.length > 50) d.recycleBin.length = 50;
+    }
+    this.addLog('删除学生(移入回收站): ' + (s?.name || ''));
     d.students = d.students.filter(x=>x.id!==id);
     DB.persist();
-    toast('已删除');
+    toast('已移入回收站');
     this.render();
+  },
+
+  /* ---- 回收站 ---- */
+  openRecycleBin() {
+    const d = DB.get();
+    const items = d.recycleBin || [];
+    const rows = items.map((it, idx) => {
+      const isStu = it._type === 'student';
+      return `<tr>
+        <td>${isStu?'<span class="tag tag-blue">学生</span>':'<span class="tag tag-green">教师</span>'}</td>
+        <td><strong>${it.name||'-'}</strong></td>
+        <td style="font-size:12px;color:var(--text-light)">${it._deletedAt?new Date(it._deletedAt).toLocaleString('zh-CN'):'-'}</td>
+        <td>
+          <button class="btn btn-ghost btn-sm" style="color:var(--success)" onclick="App.restoreRecycleItem(${idx})">♻️ 恢复</button>
+          <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="App.purgeRecycleItem(${idx})">彻底删除</button>
+        </td>
+      </tr>`;
+    }).join('');
+    this.openModal(`
+      <div class="modal-header">
+        <div class="modal-title">🗑️ 回收站 (${items.length})</div>
+        <button class="modal-close" data-close-modal>×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-hint" style="margin-bottom:10px">删除的学生/教师会在这里保留 (最多50条, 超出自动淘汰最旧)。恢复后档案原样还原。</div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>类型</th><th>姓名</th><th>删除时间</th><th>操作</th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="4" class="table-empty">回收站是空的</td></tr>`}</tbody>
+        </table></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-close-modal>关闭</button>
+      </div>
+    `);
+  },
+
+  restoreRecycleItem(idx) {
+    const d = DB.get();
+    const it = (d.recycleBin||[])[idx];
+    if (!it) return;
+    const isStu = it._type === 'student';
+    const arr = isStu ? d.students : d.teachers;
+    // id 冲突时分配新 id
+    let item = {...it};
+    delete item._deletedAt; delete item._type;
+    if (arr.some(x => x.id === item.id)) item.id = uid();
+    arr.push(item);
+    d.recycleBin.splice(idx, 1);
+    this.addLog(`从回收站恢复${isStu?'学生':'教师'}: ${item.name}`);
+    DB.persist();
+    this.closeModal();
+    toast(`已恢复 ${item.name}`);
+    this.render();
+  },
+
+  purgeRecycleItem(idx) {
+    const d = DB.get();
+    const it = (d.recycleBin||[])[idx];
+    if (!it) return;
+    if (!confirm(`彻底删除 ${it.name}？此操作不可恢复！`)) return;
+    d.recycleBin.splice(idx, 1);
+    this.addLog(`彻底删除回收站项目: ${it.name}`);
+    DB.persist();
+    this.render();
+    this.openRecycleBin();  // 刷新弹窗
   },
 
   openStudentDetail(id) {
@@ -1399,7 +1475,10 @@ const App = {
       <div class="card">
         <div class="card-header">
           <div class="card-title"><span class="title-icon"></span>教师列表</div>
-          <button class="btn btn-primary" onclick="App.openTeacherForm()">➕ 新增教师</button>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-secondary btn-sm" onclick="App.openRecycleBin()">🗑️ 回收站</button>
+            <button class="btn btn-primary" onclick="App.openTeacherForm()">➕ 新增教师</button>
+          </div>
         </div>
         <div class="toolbar">
           <div class="search-box">
@@ -1728,12 +1807,18 @@ const App = {
   },
 
   delTeacher(id) {
-    if (!confirm('确认删除该教师？')) return;
+    if (!confirm('确认删除该教师？档案会移入回收站，可随时恢复。')) return;
     const d = DB.get();
-    this.addLog('删除教师: ' + (d.teachers.find(x=>x.id===id)?.name || ''));
+    const t = d.teachers.find(x=>x.id===id);
+    if (t) {
+      d.recycleBin = d.recycleBin || [];
+      d.recycleBin.unshift({...JSON.parse(JSON.stringify(t)), _deletedAt: new Date().toISOString(), _type: 'teacher'});
+      if (d.recycleBin.length > 50) d.recycleBin.length = 50;
+    }
+    this.addLog('删除教师(移入回收站): ' + (t?.name || ''));
     d.teachers = d.teachers.filter(x=>x.id!==id);
     DB.persist();
-    toast('已删除');
+    toast('已移入回收站');
     this.render();
   },
 
