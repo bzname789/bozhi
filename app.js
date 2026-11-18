@@ -598,89 +598,58 @@ const App = {
    * ================================================================== */
   viewDashboard() {
     const d = DB.get();
-    const students = d.students;
-    const teachers = d.teachers;
-    const totalIncome = d.payments.reduce((s,p)=>s+(Number(p.amount)||0),0);
+    const now = new Date();
+    const hour = now.getHours();
+    const greet = hour < 6 ? '夜深了' : hour < 12 ? '早上好' : hour < 14 ? '中午好' : hour < 18 ? '下午好' : '晚上好';
+    const dateStr = `${now.getMonth()+1}月${now.getDate()}日 星期${'日一二三四五六'[now.getDay()]}`;
+    const activeTeachers = d.teachers.filter(t => t.status !== 'disabled').length;
 
-    // 学生报名分布
-    const typeCount = {};
-    ENROLL_TYPES.forEach(t => typeCount[t.key] = 0);
-    students.forEach(s => (s.enrollTypes||[]).forEach(t => typeCount[t] = (typeCount[t]||0)+1));
-
-    // 本月工资合计 (估算)
-    const monthSalary = teachers.reduce((sum,t) => sum + this.calcTeacherSalary(t, this.state.currentMonth).total, 0);
+    const groups = [
+      { label: '日常管理', theme: 'main', items: [
+        { icon:'👥', label:'学生管理', desc:'档案·缴费·课时', nav:'students' },
+        { icon:'🧑‍🏫', label:'教师管理', desc:`${activeTeachers} 位在职`, nav:'teachers' },
+        { icon:'➕', label:'新增学生', desc:'快速录入', act:'App.openStudentForm()' },
+        { icon:'➕', label:'新增教师', desc:'快速录入', act:'App.openTeacherForm()' },
+      ]},
+      { label: '教学业务', theme: 'biz', items: [
+        { icon:'📅', label:'考勤管理', desc:'出勤·缺勤标记', nav:'attendance' },
+        { icon:'⏱️', label:'课时消耗', desc:'小课消课记录', nav:'hours' },
+        { icon:'💸', label:'工资结算', desc:'核算·确认·锁定', nav:'salary' },
+        { icon:'📊', label:'收支总览', desc:'收入·支出·结余', nav:'finance' },
+      ]},
+      { label: '系统工具', theme: 'sys', items: [
+        { icon:'⚡', label:'快速消课', desc:'一键记课时', nav:'hours' },
+        { icon:'📜', label:'操作日志', desc:'谁在何时做了什么', nav:'logs' },
+        { icon:'⚙️', label:'系统设置', desc:'参数·云端·设备名', nav:'settings' },
+        { icon:'📥', label:'导出Excel', desc:'全部数据备份', act:'App.exportExcel(\'all\')' },
+      ]},
+    ];
 
     return `
-      <div class="stats-grid">
-        ${this.statCard('green','👥', students.length, '在册学生', `本月新增 ${students.filter(s=>s.createdAt&&s.createdAt.startsWith(this.state.currentMonth)).length} 人`)}
-        ${this.statCard('blue','🧑‍🏫', teachers.length, '在职教师', `初中部 ${teachers.filter(t=>t.dept==='初中部').length} 人`)}
-        ${this.statCard('orange','💰', fmtMoney(totalIncome), '累计收费', `${d.payments.length} 笔缴费记录`)}
-        ${this.statCard('red','💸', fmtMoney(monthSalary), '本月工资支出', this.state.currentMonth)}
-        ${this.statCard('purple','📚', d.hourLogs.length, '课时消耗记录', '小课专属')}
-        ${this.statCard('cyan','🗓️', this.remainingThisMonth(), '本月剩余', '距月底天数')}
+      <div class="dash-hero">
+        <div class="dash-hero-title">${greet} 👋</div>
+        <div class="dash-hero-sub">${d.settings.orgName||'博智托管'} · ${dateStr} · ${d.students.length} 名学生 / ${activeTeachers} 位教师</div>
       </div>
 
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title"><span class="title-icon"></span>报名类型分布</div>
-        </div>
-        <div style="display:flex;flex-wrap:wrap;gap:16px">
-          ${ENROLL_TYPES.map(t => `
-            <div style="flex:1;min-width:160px;background:#f9fafb;border-radius:8px;padding:16px;text-align:center">
-              <div style="font-size:24px;font-weight:700;color:var(--primary)">${typeCount[t.key]||0}</div>
-              <div style="font-size:12px;color:var(--text-light);margin-top:4px">${t.label}</div>
-              <div style="margin-top:8px;height:6px;background:#e5e7eb;border-radius:3px;overflow:hidden">
-                <div style="width:${students.length?(typeCount[t.key]||0)/students.length*100:0}%;height:100%;background:var(--primary);border-radius:3px"></div>
-              </div>
-            </div>
-          `).join('')}
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title"><span class="title-icon"></span>功能导航</div>
-          <span style="font-size:12px;color:var(--text-light)">常用功能都在这里</span>
-        </div>
-        ${[
-          { label: '主要', items: [
-            { icon:'👥', label:'学生管理', nav:'students' },
-            { icon:'🧑‍🏫', label:'教师管理', nav:'teachers' },
-            { icon:'➕', label:'新增学生', act:'App.openStudentForm()' },
-            { icon:'➕', label:'新增教师', act:'App.openTeacherForm()' },
-          ]},
-          { label: '业务', items: [
-            { icon:'📅', label:'考勤管理', nav:'attendance' },
-            { icon:'⏱️', label:'课时消耗', nav:'hours' },
-            { icon:'💸', label:'工资结算', nav:'salary' },
-            { icon:'📊', label:'收支总览', nav:'finance' },
-          ]},
-          { label: '系统', items: [
-            { icon:'⚡', label:'快速消课', nav:'hours' },
-            { icon:'📜', label:'操作日志', nav:'logs' },
-            { icon:'⚙️', label:'系统设置', nav:'settings' },
-            { icon:'📥', label:'导出Excel', act:'App.exportExcel(\'all\')' },
-          ]},
-        ].map(group => `
-          <div style="margin-bottom:14px">
-            <div style="font-size:12px;color:var(--text-light);margin-bottom:8px">${group.label}</div>
-            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(105px,1fr));gap:8px">
-              ${group.items.map(it => it.nav
-                ? `<button class="dash-nav-btn" data-nav="${it.nav}"><span>${it.icon}</span>${it.label}</button>`
-                : `<button class="dash-nav-btn" onclick="${it.act}"><span>${it.icon}</span>${it.label}</button>`
-              ).join('')}
-            </div>
+      ${groups.map(group => `
+        <div class="dash-group">
+          <div class="dash-group-title"><span class="dash-dot ${group.theme}"></span>${group.label}</div>
+          <div class="dash-grid">
+            ${group.items.map(it => it.nav
+              ? `<button class="dash-nav-btn ${group.theme}" data-nav="${it.nav}">
+                   <span class="dnb-icon">${it.icon}</span>
+                   <span class="dnb-label">${it.label}</span>
+                   <span class="dnb-desc">${it.desc}</span>
+                 </button>`
+              : `<button class="dash-nav-btn ${group.theme}" onclick="${it.act}">
+                   <span class="dnb-icon">${it.icon}</span>
+                   <span class="dnb-label">${it.label}</span>
+                   <span class="dnb-desc">${it.desc}</span>
+                 </button>`
+            ).join('')}
           </div>
-        `).join('')}
-      </div>
-
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title"><span class="title-icon"></span>近期缴费记录</div>
-          <button class="btn btn-secondary btn-sm" data-nav="students">查看全部 →</button>
         </div>
-        ${this.renderPaymentMiniTable(d.payments.slice(-5).reverse())}
-      </div>
+      `).join('')}
     `;
   },
 
