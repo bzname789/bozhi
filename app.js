@@ -13,7 +13,8 @@ const DB = (() => {
     payments: [],        // 缴费记录
     teacherShares: [],   // 教师消课分享链接 [{id, teacherId, code, createdAt, revokedAt}]
     logs: [],            // 操作日志 [{id, ts, device, source, action}] 上限500条
-    confirmedMonths: [], // 已确认发薪的月份 ['2026-11', ...]
+    confirmedMonths: [], // 已确认发薪(锁定)的月份 ['2026-11', ...]
+    salaryAcks: {},      // 教师工资确认反馈 { '2026-11': { teacherId: 确认时间ISO } }
     settings: {
       orgName: '博智托管',
       // 默认分成比例: 教师拿 60%, 托管 40%
@@ -36,6 +37,7 @@ const DB = (() => {
       ['students','teachers','hourLogs','payments','teacherShares','logs','confirmedMonths'].forEach(k => {
         if (!Array.isArray(cache[k])) cache[k] = [];
       });
+      if (!cache.salaryAcks || typeof cache.salaryAcks !== 'object') cache.salaryAcks = {};
       if (!cache.settings) cache.settings = JSON.parse(JSON.stringify(defaults.settings));
     } catch (e) {
       cache = JSON.parse(JSON.stringify(defaults));
@@ -228,7 +230,7 @@ const PAY_MODES = [
   { key: 'one_time',  label: '一次性缴纳' },
 ];
 
-const GRADES = ['一年级','二年级','三年级','四年级','五年级','六年级','初一','初二','初三'];
+const GRADES = ['一年级','二年级','三年级','四年级','五年级','六年级','初一','初二','初三','高一','高二','高三'];
 
 const DEPTS = ['小学部','初中部'];
 
@@ -696,19 +698,7 @@ const App = {
    *  视图: 学生管理
    * ================================================================== */
   viewStudents() {
-    const d = DB.get();
-    let list = d.students;
-    if (this.state.search) {
-      const kw = this.state.search.toLowerCase();
-      list = list.filter(s =>
-        s.name.toLowerCase().includes(kw) ||
-        (s.phone||'').includes(kw) ||
-        (s.school||'').includes(kw)
-      );
-    }
-    if (this.state.filterType) {
-      list = list.filter(s => (s.enrollTypes||[]).includes(this.state.filterType));
-    }
+    const list = this.getFilteredStudents();
 
     return `
       <div class="card">
@@ -725,6 +715,10 @@ const App = {
             <option value="">全部类型</option>
             ${ENROLL_TYPES.map(t => `<option value="${t.key}" ${this.state.filterType===t.key?'selected':''}>${t.label}</option>`).join('')}
           </select>
+          <select class="filter-select" onchange="App.state.filterGrade=this.value; App.render()">
+            <option value="">全部年级</option>
+            ${GRADES.map(g => `<option value="${g}" ${this.state.filterGrade===g?'selected':''}>${g}</option>`).join('')}
+          </select>
           <div style="margin-left:auto;font-size:12px;color:var(--text-light)">共 ${list.length} 名</div>
         </div>
         <div id="studentList">${this.renderStudentTable(list)}</div>
@@ -735,6 +729,12 @@ const App = {
   renderStudentsList() {
     const el = $('#studentList');
     if (el) el.innerHTML = this.renderStudentTable(this.getFilteredStudents());
+  },
+
+  // 学生排序: 按年级从低到高 (未知年级排最后), 同年级按姓名
+  sortStudents(list) {
+    const gi = g => { const i = GRADES.indexOf(g||''); return i === -1 ? 999 : i; };
+    return [...list].sort((a,b) => gi(a.grade) - gi(b.grade) || String(a.name||'').localeCompare(String(b.name||''), 'zh'));
   },
 
   getFilteredStudents() {
@@ -748,7 +748,8 @@ const App = {
       );
     }
     if (this.state.filterType) list = list.filter(s => (s.enrollTypes||[]).includes(this.state.filterType));
-    return list;
+    if (this.state.filterGrade) list = list.filter(s => s.grade === this.state.filterGrade);
+    return this.sortStudents(list);
   },
 
   renderStudentTable(list) {
@@ -1365,9 +1366,15 @@ const App = {
     const d = DB.get();
     let list = d.teachers;
     if (this.state.filterDept) list = list.filter(t=>t.dept===this.state.filterDept);
-    // 搜索 + 离职教师排到列表末尾
+    // 搜索 + 排序: 在职在前、全职前置、初中部前置, 已离职排最后
     list = list.filter(t => !this.state.search || t.name.includes(this.state.search) || (t.subject||'').includes(this.state.search));
-    list = [...list.filter(t => t.status !== 'disabled'), ...list.filter(t => t.status === 'disabled')];
+    const rank = (t) => {
+      const disabled = t.status === 'disabled' ? 1 : 0;
+      const full = (t.jobType||'full') === 'full' ? 0 : 1;
+      const dept = t.dept === '初中部' ? 0 : 1;
+      return disabled * 100 + full * 10 + dept;
+    };
+    list = [...list].sort((a,b) => rank(a) - rank(b));
     const disabledCount = d.teachers.filter(t=>t.status==='disabled').length;
 
     return `
@@ -1510,22 +1517,30 @@ const App = {
             <input class="form-input" type="number" id="tf_social" value="${data.socialInsurance||0}">
           </div>
           <div style="margin-top:8px">
-            <label class="form-label">生效月份 <span class="hint">从哪个月开始应用此社保设置</span></label>
-            <input class="form-input" type="month" id="tf_social_eff" value="${data.socialEffectiveMonth||t?.socialEffectiveMonth||thisMonth()}">
-            <div class="form-hint">⚠️ 仅对当月及之后生效。之前月份的社保设置不受影响。</div>
+            <label class="form-label">社保生效月份</label>
+            <div style="margin-bottom:6px">
+              <label style="font-size:13px;display:flex;align-items:center;gap:4px;cursor:pointer">
+                <input type="checkbox" id="tf_social_follow" ${(!t || !t.socialEffectiveMonth || t.socialEffectiveMonth===thisMonth())?'checked':''} onchange="const el=$('#tf_social_eff_row'); if(el) el.style.display=this.checked?'none':''">
+                跟随工资参数生效月
+              </label>
+            </div>
+            <div id="tf_social_eff_row" style="display:${(!t || !t.socialEffectiveMonth || t.socialEffectiveMonth===thisMonth())?'none':''}">
+              <input class="form-input" type="month" id="tf_social_eff" value="${data.socialEffectiveMonth||t?.socialEffectiveMonth||thisMonth()}">
+              <div class="form-hint">⚠️ 仅对当月及之后生效，之前月份的社保设置不受影响。</div>
+            </div>
           </div>
         </div>
         <div class="form-group">
-          <label class="form-label">岗位</label>
-          <div class="radio-group" id="tf_isadmin">
-            <div class="radio-item ${data.isAdmin?'checked':''}" data-key="1">管理岗 (带班补助+200)</div>
-            <div class="radio-item ${!data.isAdmin?'checked':''}" data-key="0">普通教师</div>
+          <label class="form-label">工资参数生效时间 <span class="hint">本次修改从哪个月开始生效</span></label>
+          <div class="radio-group" id="tf_eff_radio" onchange="const el=$('#tf_eff_custom_row'); if(el) el.style.display=($$('#tf_eff_radio .radio-item.checked')[0]?.dataset.key==='custom')?'':'none'">
+            <div class="radio-item checked" data-key="this">📅 本月起</div>
+            <div class="radio-item" data-key="next">📆 下月起</div>
+            <div class="radio-item" data-key="custom">🗓️ 自定义</div>
           </div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">工资参数生效月份 <span class="hint">修改工资参数后，从哪个月开始生效</span></label>
-          <input class="form-input" type="month" id="tf_eff_month" value="${data.effectiveMonth||t?.effectiveMonth||thisMonth()}">
-          <div class="form-hint">⚠️ 修改工资参数（基本工资、绩效、分成等）仅对当月及以后生效，之前月份不受影响。社保另有独立生效月。</div>
+          <div id="tf_eff_custom_row" style="display:none;margin-top:8px">
+            <input class="form-input" type="month" id="tf_eff_month" value="${data.effectiveMonth||t?.effectiveMonth||thisMonth()}">
+          </div>
+          <div class="form-hint">⚠️ 修改基本工资、绩效、分成等，仅对生效月份及以后生效，之前月份按历史参数计算，不受影响。</div>
         </div>
         <div class="form-group">
           <label class="form-label">备注</label>
@@ -1544,6 +1559,25 @@ const App = {
         el.classList.add('checked');
       };
     });
+    $$('#tf_eff_radio .radio-item').forEach(el => {
+      el.onclick = () => {
+        $$('#tf_eff_radio .radio-item').forEach(x=>x.classList.remove('checked'));
+        el.classList.add('checked');
+        const customRow = $('#tf_eff_custom_row');
+        if (customRow) customRow.style.display = el.dataset.key === 'custom' ? '' : 'none';
+      };
+    });
+    // 默认选中: 编辑已有教师且其生效月晚于本月 → 自定义(保留原值); 否则 → 下月起
+    {
+      const effM = data.effectiveMonth || t?.effectiveMonth || '';
+      const items = $$('#tf_eff_radio .radio-item');
+      const pick = (t && effM && effM > thisMonth()) ? 'custom' : 'next';
+      items.forEach(x=>x.classList.remove('checked'));
+      const target = items.find(el => el.dataset.key === pick);
+      if (target) target.classList.add('checked');
+      const customRow = $('#tf_eff_custom_row');
+      if (customRow) customRow.style.display = pick === 'custom' ? '' : 'none';
+    }
     $$('#tf_jobtype .radio-item').forEach(el => {
       el.onclick = () => {
         $$('#tf_jobtype .radio-item').forEach(x=>x.classList.remove('checked'));
@@ -1571,6 +1605,16 @@ const App = {
   saveTeacher() {
     const name = $('#tf_name').value.trim();
     if (!name) { toast('请填写姓名', 'error'); return; }
+    // 工资参数生效月: radio 本月/下月/自定义
+    const effKey = $$('#tf_eff_radio .radio-item.checked')[0]?.dataset.key || 'this';
+    const ym = thisMonth();
+    const nextMonth = (() => { const [yy,mm] = ym.split('-').map(Number); const dt = new Date(yy, mm, 1); return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}`; })();
+    let effMonth = ym;
+    if (effKey === 'next') effMonth = nextMonth;
+    else if (effKey === 'custom') effMonth = $('#tf_eff_month')?.value || ym;
+    // 社保: 默认跟随工资参数生效月, 勾选后可单独设置
+    const socialFollow = $('#tf_social_follow')?.checked;
+    const socialEff = socialFollow ? effMonth : ($('#tf_social_eff')?.value || effMonth);
     const obj = {
       name,
       dept: $('#tf_dept').value,
@@ -1585,8 +1629,8 @@ const App = {
       shareRate: Number($('#tf_share').value)||0,
       socialType: $('#tf_social_type').value,
       socialInsurance: Number($('#tf_social').value)||0,
-      socialEffectiveMonth: $('#tf_social_eff')?.value || thisMonth(),
-      effectiveMonth: $('#tf_eff_month')?.value || thisMonth(),
+      socialEffectiveMonth: socialEff,
+      effectiveMonth: effMonth,
       isAdmin: $$('#tf_isadmin .radio-item.checked')[0]?.dataset.key === '1',
       notes: $('#tf_notes').value.trim(),
     };
@@ -1963,9 +2007,12 @@ const App = {
             <input class="form-input" type="number" id="se_should" value="${rec.shouldDays ?? 22}">
           </div>
           <div class="form-group">
-            <label class="form-label">实际出勤天数<span class="hint">自动计算</span></label>
-            <input class="form-input" type="number" id="se_actual" value="${rec.actualDays ?? ((rec.shouldDays ?? 22) - (rec.absentDays||[]).length)}" readonly style="background:#f3f4f6">
-            <div class="form-hint">去「考勤管理」标记缺勤，此处自动更新</div>
+            <label class="form-label">实际出勤天数${(t.jobType||'full')==='hourly'?'<span class="hint">时薪制默认0, 请手动填写</span>':'<span class="hint">自动计算</span>'}</label>
+            ${(t.jobType||'full')==='hourly'
+              ? `<input class="form-input" type="number" id="se_actual" value="${rec.actualDays ?? 0}" min="0" step="0.5">
+                 <div class="form-hint">时薪制: 工时 = 出勤天数 × ${t.dailyHours||8}小时/天, 请按实际上课情况填写</div>`
+              : `<input class="form-input" type="number" id="se_actual" value="${rec.actualDays ?? ((rec.shouldDays ?? 22) - (rec.absentDays||[]).length)}" readonly style="background:#f3f4f6">
+                 <div class="form-hint">去「考勤管理」标记缺勤，此处自动更新</div>`}
           </div>
           <div class="form-group">
             <label class="form-label">绩效得分 (0-100%)</label>
@@ -2042,7 +2089,10 @@ const App = {
     const fullAbsent = Object.values(absentRecords).filter(v => v === 'full').length;
     const halfAbsent = Object.values(absentRecords).filter(v => v === 'half').length;
     const absentCount = fullAbsent + halfAbsent * 0.5;
-    const actualDays = Math.max(0, shouldDays - absentCount);
+    // 时薪制: 出勤天数手动填写; 全职/兼职: 自动 = 应出勤-缺勤
+    const actualDays = (t.jobType||'full')==='hourly'
+      ? Math.max(0, Number($('#se_actual').value)||0)
+      : Math.max(0, shouldDays - absentCount);
     t.salaryRecords[monthKey] = {
       shouldDays,
       actualDays,
@@ -2146,7 +2196,8 @@ const App = {
     const fullAbsent = Object.values(absentRecords).filter(v => v === 'full').length;
     const halfAbsent = Object.values(absentRecords).filter(v => v === 'half').length;
     const absentCount = fullAbsent + halfAbsent * 0.5;  // 缺勤天数(半天算0.5)
-    const actualDays = rec.actualDays ?? (shouldDays - absentCount);
+    // 时薪制: 出勤天数默认 0, 由管理端在工资调整中手动填写; 全职/兼职默认 = 应出勤-缺勤
+    const actualDays = rec.actualDays ?? (isHourly ? 0 : (shouldDays - absentCount));
 
     // ---- 社保: 本月有显式保存用本月, 否则按生效月份继承 ----
     // 规则: 
@@ -2846,6 +2897,10 @@ const App = {
     const grandTotal = rows.reduce((s,r)=>s+r.sal.total, 0);
     const activeCount = rows.filter(r => !r.sal.inactive).length;
     const inactiveRows = rows.filter(r => r.sal.inactive);
+    // 教师确认反馈
+    const acks = d.salaryAcks?.[month] || {};
+    const ackedSet = new Set(Object.keys(acks));
+    const ackedActive = rows.filter(r => !r.sal.inactive && ackedSet.has(r.t.id)).length;
 
     return `
       <div class="card">
@@ -2859,7 +2914,7 @@ const App = {
         </div>
 
         <div class="highlight-box" ${this.isMonthLocked(month)?'style="background:#f0fdf4;border-color:#86efac"':''}>
-          结算月份: <strong>${month}</strong> | 在职核算: ${activeCount} 人${inactiveRows.length?` | 当月不核算: ${inactiveRows.map(r=>`${r.t.name}(${r.sal.inactiveLabel})`).join('、')}`:''} | 工资合计: <strong>${fmtMoney(grandTotal)}</strong>
+          结算月份: <strong>${month}</strong> | 在职核算: ${activeCount} 人 | 教师已确认: <strong style="color:${ackedActive>=activeCount&&activeCount>0?'var(--success)':'var(--danger)'}">${ackedActive}/${activeCount}</strong>${activeCount>0&&ackedActive>=activeCount&&!this.isMonthLocked(month)?' (全部确认, 可锁定)':''}${inactiveRows.length?` | 当月不核算: ${inactiveRows.map(r=>`${r.t.name}(${r.sal.inactiveLabel})`).join('、')}`:''} | 工资合计: <strong>${fmtMoney(grandTotal)}</strong>
           ${this.isMonthLocked(month)
             ? ` | ✅ <strong style="color:var(--success)">已确认发薪</strong> <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="App.unlockMonth('${month}')">🔓 解锁</button>`
             : ` | <button class="btn btn-success btn-sm" onclick="App.confirmMonth('${month}')">✅ 确认发薪</button>`}
@@ -2899,7 +2954,7 @@ const App = {
                 }
                 return `
                 <tr>
-                  <td><strong>${t.name}</strong><br><span style="font-size:11px;color:var(--text-light)">${t.dept} · ${isHourly?'时薪':(t.level||'')} ${isHourly?`(${fmtMoney(t.hourlyRate)}/h)`:''}</span></td>
+                  <td><strong>${t.name}</strong>${ackedSet.has(t.id)?'<span class="tag tag-green">已确认</span>':''}<br><span style="font-size:11px;color:var(--text-light)">${t.dept} · ${isHourly?'时薪':(t.level||'')} ${isHourly?`(${fmtMoney(t.hourlyRate)}/h)`:''}</span></td>
                   <td>${isHourly ? `<span style="color:var(--text-light)">—</span>` : fmtMoney(sal.baseSalary)}</td>
                   <td>${isHourly ? `<span style="color:var(--cyan)">${fmtMoney(sal.hourlySalary)}</span><br><span style="font-size:10px;color:var(--text-light)">${fmtMoney(t.hourlyRate)}×${sal.actualHours}h</span>` : `${fmtMoney(sal.perfSalary)}<br><span style="font-size:10px;color:var(--text-light)">${sal.perfBase}×${sal.perfScore}%</span>`}</td>
                   <td>${isHourly ? '<span style="color:var(--text-light)">—</span>' : ((t.jobType||'full')==='part'?'<span style="color:var(--text-light)">兼职</span>':(sal.fullAttendBonus>0?`<span style="color:var(--success)">${fmtMoney(sal.fullAttendBonus)}</span>`:'-'))}</td>
@@ -2993,7 +3048,7 @@ const App = {
                   const s = d.students.find(x=>x.id===l.studentId);
                   const t = d.teachers.find(x=>x.id===l.teacherId);
                   return `<tr>
-                    <td>${fmtDate(l.date)}</td>
+                    <td>${fmtDate(l.date)}${l.createdAt?`<br><span style="font-size:10px;color:var(--text-light)">记于 ${fmtDate(l.createdAt)}</span>`:''}</td>
                     <td>${s?s.name:'已删除'}</td>
                     <td>${t?t.name:'-'}</td>
                     <td><strong style="color:var(--danger)">-${l.hours}</strong></td>
@@ -3379,7 +3434,8 @@ const App = {
       studentId: sid,
       teacherId: tid,
       hours, unitPrice: price,
-      date: new Date(date).toISOString(),
+      date: new Date(date).toISOString(),   // 上课时间 (可补录历史日期)
+      createdAt: new Date().toISOString(),  // 操作时间 (实际记录时刻)
       remainAfter: teacherHours - hours,
       note,
     };
@@ -4301,7 +4357,8 @@ ON CONFLICT (id) DO NOTHING;`;
       teacherId: tid,
       hours,
       unitPrice: pf.unitPrice || 100,
-      date: new Date(date).toISOString(),
+      date: new Date(date).toISOString(),   // 上课时间
+      createdAt: new Date().toISOString(),  // 操作时间
       remainAfter: teacherHours - hours,
       note,
     };
@@ -4349,6 +4406,21 @@ ON CONFLICT (id) DO NOTHING;`;
         <div class="empty-state-text">${month} 您当月${sal.inactiveLabel}，不核算工资</div></div></div>`;
     }
 
+    // 教师确认反馈状态
+    const acks = DB.get().salaryAcks?.[month] || {};
+    const myAck = acks[t.id];
+    let ackBar;
+    if (locked) {
+      ackBar = `<div class="highlight-box" style="background:#f0fdf4;border-color:#86efac">✅ ${month} 工资已由机构确认发薪，以下金额为最终核算结果${myAck?`<br><span style="font-size:12px">你已于 ${new Date(myAck).toLocaleString('zh-CN')} 核对确认</span>`:''}</div>`;
+    } else if (myAck) {
+      ackBar = `<div class="highlight-box" style="background:#f0fdf4;border-color:#86efac">✅ 你已于 ${new Date(myAck).toLocaleString('zh-CN')} 确认该月工资无误，机构已收到反馈
+        <button class="btn btn-ghost btn-sm" style="color:var(--danger);margin-left:8px" onclick="App.shareUnackSalary('${month}')">撤销确认</button></div>`;
+    } else {
+      ackBar = `<div class="highlight-box">⏳ ${month} 工资为预估值，请核对下方明细
+        <button class="btn btn-success btn-sm" style="margin-left:8px" onclick="App.shareAckSalary('${month}')">✅ 我已核对无误</button>
+        <div class="form-hint" style="margin-top:4px">点击确认后机构会收到你的反馈，确认后如发现错误可撤销再联系机构修改</div></div>`;
+    }
+
     const item = (label, val, sub='') => `
       <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 4px;border-bottom:1px solid #f1f5f9">
         <div><div style="font-size:13px">${label}</div>${sub?`<div style="font-size:11px;color:var(--text-light)">${sub}</div>`:''}</div>
@@ -4358,9 +4430,7 @@ ON CONFLICT (id) DO NOTHING;`;
     return `
       <div class="card">
         ${nav}
-        ${locked
-          ? `<div class="highlight-box" style="background:#f0fdf4;border-color:#86efac">✅ ${month} 工资已由机构确认发薪，以下金额为最终核算结果</div>`
-          : `<div class="highlight-box">⏳ ${month} 工资为预估值，机构确认发薪后会锁定金额</div>`}
+        ${ackBar}
         <div class="salary-section">
           <div class="salary-section-title">💰 本月工资构成</div>
           ${isHourly
@@ -4382,6 +4452,32 @@ ON CONFLICT (id) DO NOTHING;`;
         </div>
       </div>
     `;
+  },
+
+  /* 教师端: 确认/撤销 确认本月工资 */
+  shareAckSalary(month) {
+    const t = DB.get().teachers.find(x=>x.id===this.shareTeacherId);
+    if (!t || this.isMonthLocked(month)) return;
+    const d = DB.get();
+    if (!d.salaryAcks) d.salaryAcks = {};
+    if (!d.salaryAcks[month]) d.salaryAcks[month] = {};
+    d.salaryAcks[month][t.id] = new Date().toISOString();
+    this.addLog(`确认 ${month} 月工资无误 (已反馈机构)`);
+    DB.persist();
+    toast('已确认, 机构将收到你的反馈 ✅');
+    this.render();
+  },
+
+  shareUnackSalary(month) {
+    const t = DB.get().teachers.find(x=>x.id===this.shareTeacherId);
+    if (!t || this.isMonthLocked(month)) return;
+    if (!confirm('撤销确认？如工资有误请联系机构修改。')) return;
+    const d = DB.get();
+    if (d.salaryAcks?.[month]) delete d.salaryAcks[month][t.id];
+    this.addLog(`撤销 ${month} 月工资确认`);
+    DB.persist();
+    toast('已撤销确认');
+    this.render();
   },
 
   viewShareAttendance() {
@@ -4831,15 +4927,19 @@ ON CONFLICT (id) DO NOTHING;`;
     }
 
     if (type === 'hours' || type === 'all') {
-      const rows = [['日期','学生','授课教师','消耗课时','课时单价','教师课时费','剩余课时','备注']];
+      const rows = [['日期','上课时间','操作时间','学生','授课教师','消耗课时','课时单价','教师课时费','剩余课时','备注','记录来源']];
       d.hourLogs.slice().reverse().forEach(l => {
         const s = d.students.find(x=>x.id===l.studentId);
         const t = d.teachers.find(x=>x.id===l.teacherId);
         const rate = t ? (t.shareRate||d.settings.defaultShareRate) : 0;
         const fee = l.hours * (l.unitPrice||0) * rate / 100;
         rows.push([
-          fmtDate(l.date), s?s.name:'已删除', t?t.name:'-',
-          l.hours, l.unitPrice||0, fee.toFixed(2), l.remainAfter, l.note||''
+          fmtDate(l.date).split(' ')[0],
+          fmtDate(l.date),
+          l.createdAt ? fmtDate(l.createdAt) : '',
+          s?s.name:'已删除', t?t.name:'-',
+          l.hours, l.unitPrice||0, fee.toFixed(2), l.remainAfter, l.note||'',
+          l.createdAt && l.createdAt !== l.date ? (Math.abs(new Date(l.date)-new Date(l.createdAt))>86400000?'补录':'当天') : ''
         ]);
       });
       ws2a(rows, '消课记录');
