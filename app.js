@@ -137,7 +137,16 @@ const DB = (() => {
       // 比较时间戳: 仅当远端更新时覆盖本地
       const localTs = localStorage.getItem('bozhi_trustee_last_sync') || '0';
       const remoteTs = row.updated_at || '';
+      // 合并本地操作日志: 防止远端旧数据把本地尚未同步的新日志冲掉 (按id去重, 时间倒序取500)
+      const localLogs = (cache && Array.isArray(cache.logs)) ? cache.logs : [];
+      const remoteLogs = Array.isArray(remote.logs) ? remote.logs : [];
+      const remoteIds = new Set(remoteLogs.map(l => l.id));
+      const mergedLogs = [...localLogs.filter(l => !remoteIds.has(l.id)), ...remoteLogs]
+        .sort((a,b) => (b.ts||'').localeCompare(a.ts||'')).slice(0, 500);
       cache = remote;
+      cache.logs = mergedLogs;
+      if (!Array.isArray(cache.confirmedMonths)) cache.confirmedMonths = [];
+      if (!cache.salaryAcks || typeof cache.salaryAcks !== 'object') cache.salaryAcks = {};
       save();
       localStorage.setItem('bozhi_trustee_last_sync', remoteTs || new Date().toISOString());
       return { ok: true, updated_at: remoteTs };
@@ -630,23 +639,47 @@ const App = {
 
       <div class="card">
         <div class="card-header">
-          <div class="card-title"><span class="title-icon"></span>近期缴费记录</div>
-          <button class="btn btn-secondary btn-sm" data-nav="students">查看全部 →</button>
+          <div class="card-title"><span class="title-icon"></span>功能导航</div>
+          <span style="font-size:12px;color:var(--text-light)">常用功能都在这里</span>
         </div>
-        ${this.renderPaymentMiniTable(d.payments.slice(-5).reverse())}
+        ${[
+          { label: '主要', items: [
+            { icon:'👥', label:'学生管理', nav:'students' },
+            { icon:'🧑‍🏫', label:'教师管理', nav:'teachers' },
+            { icon:'➕', label:'新增学生', act:'App.openStudentForm()' },
+            { icon:'➕', label:'新增教师', act:'App.openTeacherForm()' },
+          ]},
+          { label: '业务', items: [
+            { icon:'📅', label:'考勤管理', nav:'attendance' },
+            { icon:'⏱️', label:'课时消耗', nav:'hours' },
+            { icon:'💸', label:'工资结算', nav:'salary' },
+            { icon:'📊', label:'收支总览', nav:'finance' },
+          ]},
+          { label: '系统', items: [
+            { icon:'⚡', label:'快速消课', nav:'hours' },
+            { icon:'📜', label:'操作日志', nav:'logs' },
+            { icon:'⚙️', label:'系统设置', nav:'settings' },
+            { icon:'📥', label:'导出Excel', act:'App.exportExcel(\'all\')' },
+          ]},
+        ].map(group => `
+          <div style="margin-bottom:14px">
+            <div style="font-size:12px;color:var(--text-light);margin-bottom:8px">${group.label}</div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(105px,1fr));gap:8px">
+              ${group.items.map(it => it.nav
+                ? `<button class="dash-nav-btn" data-nav="${it.nav}"><span>${it.icon}</span>${it.label}</button>`
+                : `<button class="dash-nav-btn" onclick="${it.act}"><span>${it.icon}</span>${it.label}</button>`
+              ).join('')}
+            </div>
+          </div>
+        `).join('')}
       </div>
 
       <div class="card">
         <div class="card-header">
-          <div class="card-title"><span class="title-icon"></span>快捷操作</div>
+          <div class="card-title"><span class="title-icon"></span>近期缴费记录</div>
+          <button class="btn btn-secondary btn-sm" data-nav="students">查看全部 →</button>
         </div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px">
-          <button class="btn btn-primary" onclick="App.openStudentForm()">➕ 新增学生</button>
-          <button class="btn btn-success" onclick="App.openTeacherForm()">➕ 新增教师</button>
-          <button class="btn btn-secondary" onclick="App.openConsumePanel()">⚡ 快速消课</button>
-          <button class="btn btn-secondary" data-nav="salary">💰 工资结算</button>
-          <button class="btn btn-secondary" onclick="App.exportExcel('all')">📊 导出Excel</button>
-        </div>
+        ${this.renderPaymentMiniTable(d.payments.slice(-5).reverse())}
       </div>
     `;
   },
