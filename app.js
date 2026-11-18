@@ -452,8 +452,14 @@ const App = {
   /* ---------- 主渲染 ---------- */
   render() {
     const root = $('#app');
+    // 切换页面时滚动到顶部 (弹窗内的局部刷新不触发, 因为视图未变)
+    const prevView = this._lastRenderedView;
     root.innerHTML = this.renderShell();
     this.afterRender();
+    if (prevView !== undefined && prevView !== this.view + '|' + this.state.shareTab) {
+      window.scrollTo(0, 0);
+    }
+    this._lastRenderedView = this.view + '|' + this.state.shareTab;
   },
 
   renderShell() {
