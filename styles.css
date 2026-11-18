@@ -1284,3 +1284,117 @@ tbody tr:last-child td {
 }
 .back-home-title { font-size: 15px; font-weight: 700; color: var(--text, #1f2937); }
 
+/* ============================================================
+   细节打磨 (2026-11)
+   ============================================================ */
+
+/* 全局: 去掉移动端点击高亮闪块, 滚动更顺滑 */
+* { -webkit-tap-highlight-color: transparent; }
+html { scroll-behavior: smooth; }
+body { text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased; }
+
+/* 按钮: 按压反馈 + 过渡更自然 */
+.btn { transition: all 0.15s ease; }
+.btn:active { transform: scale(0.96); opacity: 0.9; }
+.btn-primary { box-shadow: 0 1px 2px rgba(44,95,179,.25); }
+.btn-primary:hover { box-shadow: 0 2px 6px rgba(44,95,179,.3); }
+
+/* 卡片: 更精致的边界 */
+.card, .table-wrap {
+  border: 1px solid rgba(0,0,0,.04);
+}
+.card { transition: box-shadow .2s ease; }
+
+/* 表格: 行悬停更柔和, 隔行微底色提升可读性 */
+tbody tr:nth-child(even) { background: rgba(249,250,251,.6); }
+tbody tr:hover { background: #f0f5ff !important; }
+td { color: var(--text); }
+
+/* 弹窗: 进入动画 */
+.modal-overlay { animation: fadeIn .15s ease; }
+.modal { animation: popIn .18s ease; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes popIn { from { opacity: 0; transform: scale(.97) translateY(8px); } to { opacity: 1; transform: none; } }
+
+/* 弹窗关闭按钮: 加大点击热区 */
+.modal-close { width: 34px; height: 34px; font-size: 20px; border-radius: 8px; }
+
+/* 标签: 统一圆角更圆润 */
+.tag { border-radius: 10px; padding: 2px 9px; }
+
+/* 输入控件: hover 提示 */
+.form-input:hover, .form-select:hover, .form-textarea:hover, .search-box input:hover {
+  border-color: #c9d4e8;
+}
+
+/* Toast: 手机上居中显示, 不被右侧截断 */
+@media (max-width: 768px) {
+  .toast-container {
+    left: 16px; right: 16px; top: 64px;
+    align-items: stretch;
+  }
+  .toast { min-width: 0; width: 100%; }
+}
+
+/* 手机端专项优化 */
+@media (max-width: 768px) {
+  /* 输入框字号16px: 防止 iOS Safari 自动放大页面 */
+  .form-input, .form-select, .form-textarea,
+  .search-box input, .filter-select, .th-filter,
+  .month-selector input, .salary-item-input {
+    font-size: 16px;
+  }
+
+  /* 按钮加大: 手指易点, 不误触 */
+  .btn { padding: 9px 16px; }
+  .btn-sm { padding: 7px 12px; font-size: 13px; }
+  .btn-ghost { padding: 8px 10px; }
+
+  /* 操作列按钮换行更整齐 */
+  .action-cell { flex-wrap: wrap; gap: 2px; }
+
+  /* 表格: 收紧内边距, 一屏多看几行 */
+  th, td { padding: 10px 10px; }
+
+  /* 弹窗改为底部抽屉式: 拇指够得着, 关闭方便 */
+  .modal-overlay { align-items: flex-end; padding: 0; }
+  .modal {
+    max-width: 100%;
+    max-height: 92vh;
+    border-radius: 18px 18px 0 0;
+    animation: sheetUp .22s ease;
+  }
+  .modal.large { max-width: 100%; }
+  .modal-body { padding: 18px 16px; }
+  .modal-header { padding: 14px 16px; }
+  .modal-footer { padding: 12px 16px; }
+  .modal-footer .btn { flex: 1; justify-content: center; }
+  @keyframes sheetUp { from { transform: translateY(30%); opacity: .6; } to { transform: none; opacity: 1; } }
+
+  /* 首页导航: 两列整齐排布 */
+  .dash-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
+  .dash-hero { padding: 20px 18px; border-radius: 14px; }
+  .dash-hero-title { font-size: 19px; }
+
+  /* 卡片间距收紧 */
+  .card { padding: 16px 14px; margin-bottom: 14px; border-radius: 14px; }
+  .main { padding: 12px; }
+
+  /* 统计卡: 数值更醒目 */
+  .stat-value { font-size: 20px; }
+
+  /* 回到主页按钮更好点 */
+  .back-home-bar .btn { padding: 8px 14px; }
+}
+
+/* 桌面端: 列表页 hover 出现操作按钮的过渡感 (不影响功能) */
+.action-cell .btn { transition: all .12s ease; }
+.action-cell .btn:active { transform: scale(.94); }
+
+/* 空状态更轻量 */
+.empty-state { padding: 44px 20px; }
+.empty-state-icon { font-size: 42px; }
+
+/* 选中文字颜色统一品牌色 */
+::selection { background: var(--primary-light); color: var(--primary-dark); }
+
