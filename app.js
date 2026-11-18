@@ -770,10 +770,11 @@ const App = {
     if (el) el.innerHTML = this.renderStudentTable(this.getFilteredStudents());
   },
 
-  // 学生排序: 按年级从低到高 (未知年级排最后), 同年级按姓名
+  // 学生排序: 在托在前、非在托靠后, 按年级从低到高 (未知年级排最后), 同年级按姓名
   sortStudents(list) {
     const gi = g => { const i = GRADES.indexOf(g||''); return i === -1 ? 999 : i; };
-    return [...list].sort((a,b) => gi(a.grade) - gi(b.grade) || String(a.name||'').localeCompare(String(b.name||''), 'zh'));
+    const ci = s => (s.careStatus === 'inactive') ? 1 : 0;
+    return [...list].sort((a,b) => ci(a) - ci(b) || gi(a.grade) - gi(b.grade) || String(a.name||'').localeCompare(String(b.name||''), 'zh'));
   },
 
   getFilteredStudents() {
@@ -788,6 +789,7 @@ const App = {
     }
     if (this.state.filterType) list = list.filter(s => (s.enrollTypes||[]).includes(this.state.filterType));
     if (this.state.filterGrade) list = list.filter(s => s.grade === this.state.filterGrade);
+    if (this.state.filterCare) list = list.filter(s => (s.careStatus === 'inactive' ? 'inactive' : 'active') === this.state.filterCare);
     return this.sortStudents(list);
   },
 
@@ -799,6 +801,13 @@ const App = {
           <thead>
             <tr>
               <th>姓名</th>
+              <th>类别
+                <select class="th-filter" onchange="App.state.filterCare=this.value; App.render()">
+                  <option value="">全部</option>
+                  <option value="active" ${this.state.filterCare==='active'?'selected':''}>在托</option>
+                  <option value="inactive" ${this.state.filterCare==='inactive'?'selected':''}>非在托</option>
+                </select>
+              </th>
               <th>年级
                 <select class="th-filter" onchange="App.state.filterGrade=this.value; App.render()">
                   <option value="">全部</option>
@@ -827,6 +836,7 @@ const App = {
               }).filter(Boolean);
               return `<tr>
                 <td><strong>${s.name}</strong></td>
+                <td>${s.careStatus === 'inactive' ? '<span class="tag tag-gray">非在托</span>' : '<span class="tag tag-green">在托</span>'}</td>
                 <td>${s.grade||'-'}</td>
                 <td>${(s.enrollTypes||[]).map(t => {
                   const f = ENROLL_TYPES.find(x=>x.key===t);
@@ -862,6 +872,7 @@ const App = {
     const s = id ? DB.get().students.find(x=>x.id===id) : null;
     const data = s || {
       name:'', grade:'', phone:'', school:'', enrollTypes:[],
+      careStatus: 'active',
       projectFees: {}, remainHours:0, notes:'', guardian:'', addr:'',
       teacherBindings: [],   // [{teacherId, subject, enrollType}]
       gradeTeachers: [],     // [{teacherId}] 晚辅导/寒暑期班按年级绑定的固定老师
@@ -949,6 +960,13 @@ const App = {
           </div>
         </div>
         <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">类别<span class="hint">在托/非在托</span></label>
+            <select class="form-select" id="sf_care">
+              <option value="active" ${(data.careStatus||'active')==='active'?'selected':''}>在托</option>
+              <option value="inactive" ${data.careStatus==='inactive'?'selected':''}>非在托</option>
+            </select>
+          </div>
           <div class="form-group">
             <label class="form-label">监护人</label>
             <input class="form-input" id="sf_guardian" value="${data.guardian||''}" placeholder="家长姓名">
@@ -1226,6 +1244,7 @@ const App = {
     const obj = {
       name,
       grade: $('#sf_grade').value,
+      careStatus: $('#sf_care').value === 'inactive' ? 'inactive' : 'active',
       guardian: $('#sf_guardian').value.trim(),
       phone: $('#sf_phone').value.trim(),
       school: $('#sf_school').value.trim(),
