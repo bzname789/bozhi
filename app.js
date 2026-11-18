@@ -12,6 +12,8 @@ const DB = (() => {
     hourLogs: [],        // 小课课时消耗记录
     payments: [],        // 缴费记录
     teacherShares: [],   // 教师消课分享链接 [{id, teacherId, code, createdAt, revokedAt}]
+    logs: [],            // 操作日志 [{id, ts, device, source, action}] 上限500条
+    confirmedMonths: [], // 已确认发薪的月份 ['2026-11', ...]
     settings: {
       orgName: '博智托管',
       // 默认分成比例: 教师拿 60%, 托管 40%
@@ -31,7 +33,7 @@ const DB = (() => {
       if (!raw) { cache = JSON.parse(JSON.stringify(defaults)); save(); }
       else cache = JSON.parse(raw);
       // 容错
-      ['students','teachers','hourLogs','payments','teacherShares'].forEach(k => {
+      ['students','teachers','hourLogs','payments','teacherShares','logs','confirmedMonths'].forEach(k => {
         if (!Array.isArray(cache[k])) cache[k] = [];
       });
       if (!cache.settings) cache.settings = JSON.parse(JSON.stringify(defaults.settings));
@@ -229,6 +231,9 @@ const PAY_MODES = [
 const GRADES = ['一年级','二年级','三年级','四年级','五年级','六年级','初一','初二','初三'];
 
 const DEPTS = ['小学部','初中部'];
+
+/* 消课备注快捷标签 */
+const NOTE_TAGS = ['新课','复习','测验','作业讲评'];
 
 /* 教师职级示例 */
 const TEACHER_LEVELS = ['初级教师','中级教师','高级教师','骨干教师','学科带头人'];
@@ -469,6 +474,7 @@ const App = {
         <div class="topbar-nav" style="display:flex;gap:4px">
           <button class="btn btn-sm share-tab-btn" style="background:${tab==='consume'?'rgba(255,255,255,.25)':'rgba(255,255,255,.1)'};color:#fff;border:none" onclick="App.state.shareTab='consume'; App.render()">⏱️ 消课</button>
           <button class="btn btn-sm share-tab-btn" style="background:${tab==='attendance'?'rgba(255,255,255,.25)':'rgba(255,255,255,.1)'};color:#fff;border:none" onclick="App.state.shareTab='attendance'; App.render()">📅 考勤</button>
+          <button class="btn btn-sm share-tab-btn" style="background:${tab==='salary'?'rgba(255,255,255,.25)':'rgba(255,255,255,.1)'};color:#fff;border:none" onclick="App.state.shareTab='salary'; App.render()">💰 我的工资</button>
         </div>
         <div class="topbar-actions">
           <span class="date-now">${t ? '欢迎, ' + t.name : '教师'}</span>
@@ -506,6 +512,7 @@ const App = {
       { key: 'hours',     label: '课时消耗', icon: '⏱️', group: '业务' },
       { key: 'salary',    label: '工资结算', icon: '💸', group: '业务' },
       { key: 'finance',   label: '收支总览', icon: '📊', group: '业务' },
+      { key: 'logs',      label: '操作日志', icon: '📜', group: '系统' },
       { key: 'settings',  label: '系统设置', icon: '⚙️', group: '系统' },
     ];
     const groups = ['主要', '业务', '系统'];
@@ -551,7 +558,9 @@ const App = {
     let content = '';
     if (this.shareMode) {
       const tab = this.state.shareTab || 'consume';
-      content = tab === 'attendance' ? this.viewShareAttendance() : this.viewShareConsume();
+      content = tab === 'attendance' ? this.viewShareAttendance()
+        : tab === 'salary' ? this.viewShareSalary()
+        : this.viewShareConsume();
       return `<div class="${mainClass}">${content}</div>`;
     }
     switch (this.view) {
@@ -562,6 +571,7 @@ const App = {
       case 'salary':    content = this.viewSalary(); break;
       case 'hours':     content = this.viewHours(); break;
       case 'finance':   content = this.viewFinance(); break;
+      case 'logs':      content = this.viewLogs(); break;
       case 'settings':  content = this.viewSettings(); break;
       default: content = this.viewDashboard();
     }
@@ -1196,6 +1206,7 @@ const App = {
       obj.totalHours = obj.remainHours;
       d.students.push(obj);
     }
+    this.addLog('保存学生: ' + obj.name);
     DB.persist();
     this.closeModal();
     toast('保存成功');
@@ -1205,6 +1216,7 @@ const App = {
   delStudent(id) {
     if (!confirm('确认删除该学生？相关缴费记录会保留但不再显示学生名。')) return;
     const d = DB.get();
+    this.addLog('删除学生: ' + (d.students.find(x=>x.id===id)?.name || ''));
     d.students = d.students.filter(x=>x.id!==id);
     DB.persist();
     toast('已删除');
@@ -1593,6 +1605,7 @@ const App = {
       obj.createdAt = new Date().toISOString();
       d.teachers.push(obj);
     }
+    this.addLog('保存教师: ' + name);
     DB.persist();
     this.closeModal();
     toast('保存成功');
@@ -1630,6 +1643,7 @@ const App = {
   delTeacher(id) {
     if (!confirm('确认删除该教师？')) return;
     const d = DB.get();
+    this.addLog('删除教师: ' + (d.teachers.find(x=>x.id===id)?.name || ''));
     d.teachers = d.teachers.filter(x=>x.id!==id);
     DB.persist();
     toast('已删除');
@@ -1668,6 +1682,7 @@ const App = {
     if (!t) return;
     t.status = 'disabled';
     t.disabledFrom = $('#td_disable_month').value || thisMonth();
+    this.addLog('禁用教师: ' + t.name);
     DB.persist();
     this.closeModal();
     toast(`${t.name} 已禁用，${t.disabledFrom} 起不再核算工资`);
@@ -1717,6 +1732,7 @@ const App = {
       t.activeFrom = m;
     }
     t.status = 'active';
+    this.addLog('启用教师: ' + t.name);
     DB.persist();
     this.closeModal();
     toast(`${t.name} 已启用，${t.activeFrom || '当月'} 起开始核算工资`);
@@ -1918,10 +1934,18 @@ const App = {
   },
 
   openSalaryEdit(teacherId) {
+    if (!this.guardMonth(this.state.currentMonth)) return;
     const t = DB.get().teachers.find(x=>x.id===teacherId);
     const sal = this.calcTeacherSalary(t, this.state.currentMonth);
     const monthKey = this.state.currentMonth;
     const rec = t.salaryRecords?.[monthKey] || {};
+    // 缺勤摘要 (供快捷查看/跳转)
+    const absRec = rec.absentRecords || {};
+    (rec.absentDays || []).forEach(dd => { if (!absRec[dd]) absRec[dd] = 'full'; });
+    const absEntries = Object.entries(absRec).sort();
+    const absSummary = absEntries.length
+      ? absEntries.map(([dd, v]) => `${dd.slice(5)}${v==='half'?'(半天)':'(全天)'}`).join('、')
+      : '本月无缺勤记录';
 
     this.openModal(`
       <div class="modal-header">
@@ -1929,6 +1953,10 @@ const App = {
         <button class="modal-close" data-close-modal>×</button>
       </div>
       <div class="modal-body">
+        <div class="highlight-box" style="font-size:12px">
+          📅 本月缺勤: ${absSummary}
+          ${absEntries.length ? `<button class="btn btn-ghost btn-sm" style="margin-left:8px" onclick="App.openAbsentModal('${teacherId}')">✏️ 修改缺勤</button>` : `<button class="btn btn-ghost btn-sm" style="margin-left:8px" onclick="App.openAbsentModal('${teacherId}')">📅 标记缺勤</button>`}
+        </div>
         <div class="form-row-3">
           <div class="form-group">
             <label class="form-label">应出勤天数</label>
@@ -1999,6 +2027,7 @@ const App = {
   },
 
   saveSalaryEdit(teacherId) {
+    if (!this.guardMonth(this.state.currentMonth)) return;
     const d = DB.get();
     const t = d.teachers.find(x=>x.id===teacherId);
     if (!t) return;
@@ -2028,6 +2057,7 @@ const App = {
       socialInsurance: Number($('#se_social').value)||0,
       note: $('#se_note').value.trim(),
     };
+    this.addLog('修改工资参数 (' + monthKey + ')');
     DB.persist();
     this.closeModal();
     toast('工资参数已更新');
@@ -2486,6 +2516,7 @@ const App = {
   },
 
   setShouldDays(teacherId, val) {
+    if (!this.guardMonth(this.state.currentMonth)) { this.render(); return; }
     const d = DB.get();
     const t = d.teachers.find(x=>x.id===teacherId);
     if (!t) return;
@@ -2493,12 +2524,14 @@ const App = {
     if (!t.salaryRecords) t.salaryRecords = {};
     if (!t.salaryRecords[month]) t.salaryRecords[month] = {};
     t.salaryRecords[month].shouldDays = Number(val)||0;
+    this.addLog('修改应出勤天数 → ' + val);
     DB.persist();
     toast('应出勤天数已更新');
     this.render();
   },
 
   openAbsentModal(teacherId) {
+    if (!this.guardMonth(this.state.currentMonth)) return;
     const d = DB.get();
     const t = d.teachers.find(x=>x.id===teacherId);
     if (!t) return;
@@ -2591,6 +2624,7 @@ const App = {
   },
 
   saveAbsent(teacherId) {
+    if (!this.guardMonth(this.state.currentMonth)) return;
     const d = DB.get();
     const t = d.teachers.find(x=>x.id===teacherId);
     if (!t) return;
@@ -2609,6 +2643,7 @@ const App = {
     t.salaryRecords[month].absentRecords = absentRecords;
     t.salaryRecords[month].absentDays = Object.keys(absentRecords); // 兼容
     t.salaryRecords[month].actualDays = shouldDays - fullAbsent - halfAbsent * 0.5;
+    this.addLog('保存教师考勤: ' + t.name);
     DB.persist();
     this.closeModal();
     toast(`已保存 ${t.name} 的考勤记录`);
@@ -2789,6 +2824,7 @@ const App = {
       }
     });
     s.attendanceRecords[month][attType] = records;
+    this.addLog('保存学生考勤: ' + s.name);
     DB.persist();
     this.closeModal();
     toast(`已保存 ${s.name} 的考勤记录`);
@@ -2822,8 +2858,11 @@ const App = {
           </div>
         </div>
 
-        <div class="highlight-box">
+        <div class="highlight-box" ${this.isMonthLocked(month)?'style="background:#f0fdf4;border-color:#86efac"':''}>
           结算月份: <strong>${month}</strong> | 在职核算: ${activeCount} 人${inactiveRows.length?` | 当月不核算: ${inactiveRows.map(r=>`${r.t.name}(${r.sal.inactiveLabel})`).join('、')}`:''} | 工资合计: <strong>${fmtMoney(grandTotal)}</strong>
+          ${this.isMonthLocked(month)
+            ? ` | ✅ <strong style="color:var(--success)">已确认发薪</strong> <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="App.unlockMonth('${month}')">🔓 解锁</button>`
+            : ` | <button class="btn btn-success btn-sm" onclick="App.confirmMonth('${month}')">✅ 确认发薪</button>`}
         </div>
 
         <div class="table-wrap">
@@ -2948,7 +2987,7 @@ const App = {
         ${monthLogs.length ? `
           <div class="table-wrap">
             <table>
-              <thead><tr><th>日期</th><th>学生</th><th>教师</th><th>消耗</th><th>单价</th><th>教师课时费</th><th>剩余</th><th>操作</th></tr></thead>
+              <thead><tr><th>日期</th><th>学生</th><th>教师</th><th>消耗</th><th>单价</th><th>教师课时费</th><th>备注</th><th>剩余</th><th>操作</th></tr></thead>
               <tbody>
                 ${monthLogs.slice().reverse().map(l => {
                   const s = d.students.find(x=>x.id===l.studentId);
@@ -2960,8 +2999,12 @@ const App = {
                     <td><strong style="color:var(--danger)">-${l.hours}</strong></td>
                     <td>${fmtMoney(l.unitPrice)}</td>
                     <td><strong style="color:var(--success)">${fmtMoney(l.hours*l.unitPrice*(t?(t.shareRate||DB.get().settings.defaultShareRate):0)/100)}</strong></td>
+                    <td style="max-width:120px;font-size:12px;color:var(--text-light)">${l.note||'-'}</td>
                     <td>${l.remainAfter}</td>
-                    <td><button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="App.delHourLog('${l.id}')">删除</button></td>
+                    <td>
+                      <button class="btn btn-ghost btn-sm" onclick="App.openHourLogEdit('${l.id}')">修改</button>
+                      <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="App.delHourLog('${l.id}')">删除</button>
+                    </td>
                   </tr>`;
                 }).join('')}
               </tbody>
@@ -3055,12 +3098,16 @@ const App = {
         <div class="highlight-box" id="cf_preview">填写后将显示课时费预览</div>
         <div class="form-group">
           <label class="form-label">备注</label>
-          <input class="form-input" id="cf_note" placeholder="可选">
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">
+            ${NOTE_TAGS.map(tag=>`<button type="button" class="btn btn-secondary btn-sm" style="padding:2px 10px;font-size:12px" onclick="App.appendNote('cf_note','${tag}')">${tag}</button>`).join('')}
+          </div>
+          <input class="form-input" id="cf_note" placeholder="可选，点击上方标签快速填写">
         </div>
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" data-close-modal>取消</button>
         <button class="btn btn-primary" onclick="App.saveConsume()">确认消课</button>
+        <button class="btn btn-secondary" style="border-color:var(--primary);color:var(--primary)" onclick="App.saveConsume(true)" title="保存后继续记下一笔，不用重新打开">保存并记下一笔</button>
       </div>
     `);
 
@@ -3136,7 +3183,170 @@ const App = {
     `;
   },
 
-  saveConsume() {
+  /* ---- 操作日志 ---- */
+  // 设备名: localStorage 本机保存 (不随云端同步, 每台设备各自命名)
+  getDeviceName() {
+    let name = localStorage.getItem('bozhi_device_name');
+    if (name) return name;
+    const ua = navigator.userAgent;
+    let dev = '未知设备', browser = '';
+    if (/iPhone/.test(ua)) dev = 'iPhone';
+    else if (/iPad/.test(ua)) dev = 'iPad';
+    else if (/Android/.test(ua)) dev = 'Android';
+    else if (/Macintosh/.test(ua)) dev = 'Mac';
+    else if (/Windows/.test(ua)) dev = 'Windows';
+    else if (/Linux/.test(ua)) dev = 'Linux';
+    if (/MicroMessenger/.test(ua)) browser = '微信';
+    else if (/Edg\//.test(ua)) browser = 'Edge';
+    else if (/Chrome\//.test(ua)) browser = 'Chrome';
+    else if (/Safari\//.test(ua)) browser = 'Safari';
+    else if (/Firefox\//.test(ua)) browser = 'Firefox';
+    name = browser ? `${dev}·${browser}` : dev;
+    localStorage.setItem('bozhi_device_name', name);
+    return name;
+  },
+
+  // 当前操作来源: 管理端 / 教师分享端(带教师名)
+  logSource() {
+    if (this.shareMode && this.shareTeacherId) {
+      const t = DB.get().teachers.find(x=>x.id===this.shareTeacherId);
+      return `share:${t?t.name:'未知教师'}`;
+    }
+    return 'admin';
+  },
+
+  // 记录操作日志 (只写内存, 跟随业务 DB.persist 一起同步, 避免递归)
+  addLog(action) {
+    try {
+      const d = DB.get();
+      d.logs.unshift({
+        id: uid(),
+        ts: new Date().toISOString(),
+        device: this.getDeviceName(),
+        source: this.logSource(),
+        action,
+      });
+      if (d.logs.length > 500) d.logs.length = 500;  // 上限500条
+    } catch (e) { /* 日志失败不影响业务 */ }
+  },
+
+  /* ---- 发薪确认 + 月份锁定 ---- */
+  isMonthLocked(m) {
+    return (DB.get().confirmedMonths || []).includes(m);
+  },
+  // 统一守卫: 该月已确认发薪时拦截修改操作
+  guardMonth(m) {
+    if (this.isMonthLocked(m)) {
+      toast(`⚠️ ${m} 已确认发薪并锁定，如需修改请先在「工资结算」页解锁`, 'warning');
+      return false;
+    }
+    return true;
+  },
+  confirmMonth(m) {
+    if (this.isMonthLocked(m)) return;
+    const total = DB.get().teachers.reduce((s,t)=>s+this.calcTeacherSalary(t,m).total,0);
+    if (!confirm(`确认 ${m} 月已发薪？\n\n工资合计: ${fmtMoney(total)}\n\n确认后该月的工资参数、考勤将被锁定，不可再修改（解锁后才能改）。`)) return;
+    const d = DB.get();
+    if (!d.confirmedMonths) d.confirmedMonths = [];
+    d.confirmedMonths.push(m);
+    this.addLog('确认发薪并锁定: ' + m);
+    DB.persist();
+    toast(`${m} 已确认发薪 🔒`);
+    this.render();
+  },
+  unlockMonth(m) {
+    if (!confirm(`解锁 ${m} 月？解锁后该月的工资和考勤恢复可修改，修改后请重新确认发薪。`)) return;
+    const d = DB.get();
+    d.confirmedMonths = (d.confirmedMonths||[]).filter(x=>x!==m);
+    this.addLog('解锁发薪月份: ' + m);
+    DB.persist();
+    toast(`${m} 已解锁`);
+    this.render();
+  },
+
+  /* ====================================================================
+   *  视图: 操作日志
+   * ================================================================== */
+  viewLogs() {
+    const d = DB.get();
+    const filter = this.state.logFilter || '';
+    let logs = d.logs || [];
+    if (filter === 'admin') logs = logs.filter(l => l.source === 'admin');
+    else if (filter === 'share') logs = logs.filter(l => (l.source||'').startsWith('share:'));
+    const rows = logs.slice(0, 300).map(l => {
+      const isShare = (l.source||'').startsWith('share:');
+      return `<tr>
+        <td style="white-space:nowrap">${new Date(l.ts).toLocaleString('zh-CN', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</td>
+        <td>${l.device||'-'}</td>
+        <td>${isShare?`<span class="tag tag-cyan">${(l.source||'').slice(6)}</span>`:'<span class="tag tag-orange">管理端</span>'}</td>
+        <td>${l.action||''}</td>
+      </tr>`;
+    }).join('');
+    return `
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title"><span class="title-icon"></span>操作日志</div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-secondary btn-sm" onclick="App.exportLogsCsv()">⬇️ 导出</button>
+            <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="App.clearLogs()">清空</button>
+          </div>
+        </div>
+        <div class="toolbar">
+          <select class="filter-select" onchange="App.state.logFilter=this.value; App.render()">
+            <option value="">全部来源</option>
+            <option value="admin" ${filter==='admin'?'selected':''}>仅管理端</option>
+            <option value="share" ${filter==='share'?'selected':''}>仅教师端</option>
+          </select>
+          <div style="margin-left:auto;font-size:12px;color:var(--text-light)">共 ${logs.length} 条 (最多保留500条) · 本机设备名: ${this.getDeviceName()}</div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>时间</th><th>设备</th><th>来源</th><th>操作内容</th></tr></thead>
+            <tbody>${rows || `<tr><td colspan="4" class="table-empty">暂无日志</td></tr>`}</tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  },
+
+  exportLogsCsv() {
+    const d = DB.get();
+    const lines = [['时间','设备','来源','操作内容'].join(',')];
+    (d.logs||[]).forEach(l => {
+      lines.push([
+        new Date(l.ts).toLocaleString('zh-CN'),
+        `"${(l.device||'').replace(/"/g,'""')}"`,
+        `"${(l.source||'').replace(/"/g,'""')}"`,
+        `"${(l.action||'').replace(/"/g,'""')}"`,
+      ].join(','));
+    });
+    const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `操作日志_${today()}.csv`;
+    a.click();
+    this.addLog('导出操作日志');
+    toast('已导出');
+  },
+
+  clearLogs() {
+    if (!confirm('确认清空全部操作日志？此操作不可恢复。')) return;
+    DB.get().logs = [];
+    DB.persist();
+    toast('日志已清空');
+    this.render();
+  },
+
+  // 备注快捷标签: 追加到输入框
+  appendNote(inputId, tag) {
+    const el = $('#'+inputId);
+    if (!el) return;
+    const cur = el.value.trim();
+    el.value = cur ? (cur.includes(tag) ? cur : cur + ' ' + tag) : tag;
+    el.focus();
+  },
+
+  saveConsume(keepOpen=false) {
     const sid = $('#cf_student').value;
     const tid = $('#cf_teacher').value;
     const hours = Number($('#cf_hours').value)||0;
@@ -3175,14 +3385,32 @@ const App = {
     };
     d.hourLogs.push(log);
     DB.persist();
-    this.closeModal();
-    toast(`已记录 ${s.name} 消课 ${hours} 课时`);
-    this.render();
+    const tName = d.teachers.find(x=>x.id===tid)?.name || '';
+    this.addLog(`管理端消课: ${s.name} · ${tName} · ${hours}课时${note?' · '+note:''}`);
+
+    if (keepOpen) {
+      // 批量连续消课: 保留学生/教师/单价, 清空课时和备注, 日期重置今天
+      $('#cf_hours').value = '1';
+      $('#cf_note').value = '';
+      $('#cf_date').value = today();
+      const remain = this.getTeacherHours(s, tid);
+      toast(`已记录 ${s.name} 消课 ${hours} 课时 · ${tName}剩余 ${remain} 课时`);
+      this.updateConsumeRemaining();
+    } else {
+      this.closeModal();
+      toast(`已记录 ${s.name} 消课 ${hours} 课时`);
+      this.render();
+    }
   },
 
   delHourLog(id) {
-    if (!confirm('确认删除该消课记录？课时会退回给对应老师。')) return;
     const d = DB.get();
+    const log0 = d.hourLogs.find(x=>x.id===id);
+    if (log0) {
+      const logMonth = new Date(log0.date).toISOString().slice(0,7);
+      if (this.isMonthLocked(logMonth)) { toast(`该消课记录所属月份 ${logMonth} 已确认发薪并锁定，请先解锁`, 'warning'); return; }
+    }
+    if (!confirm('确认删除该消课记录？课时会退回给对应老师。')) return;
     const log = d.hourLogs.find(x=>x.id===id);
     if (!log) return;
     const s = d.students.find(x=>x.id===log.studentId);
@@ -3198,8 +3426,111 @@ const App = {
       s.remainHours = (s.teacherHours || []).reduce((sum, x) => sum + (x.hours||0), 0);
     }
     d.hourLogs = d.hourLogs.filter(x=>x.id!==id);
+    this.addLog('删除消课记录 (课时已退回)');
     DB.persist();
     toast('已删除, 课时已退回');
+    this.render();
+  },
+
+  /* ---- 修改已消课记录 ---- */
+  openHourLogEdit(id) {
+    const d = DB.get();
+    const log = d.hourLogs.find(x=>x.id===id);
+    if (!log) return;
+    const logMonth = new Date(log.date).toISOString().slice(0,7);
+    if (this.isMonthLocked(logMonth)) { toast(`该记录所属月份 ${logMonth} 已确认发薪并锁定，请先解锁`, 'warning'); return; }
+    const s = d.students.find(x=>x.id===log.studentId);
+    if (!s) { toast('原学生已被删除，无法修改', 'error'); return; }
+    // 该学生可选教师 (在职优先)
+    const teacherOpts = d.teachers.map(t =>
+      `<option value="${t.id}" ${t.id===log.teacherId?'selected':''}>${t.name}${t.status==='disabled'?' (已离职)':''}</option>`
+    ).join('');
+    const dateStr = new Date(log.date).toISOString().slice(0,10);
+    this.openModal(`
+      <div class="modal-header">
+        <div class="modal-title">修改消课记录 · ${s.name}</div>
+        <button class="modal-close" data-close-modal>×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-row-3">
+          <div class="form-group">
+            <label class="form-label">消耗课时</label>
+            <input class="form-input" type="number" id="hl_hours" value="${log.hours}" min="0.5" step="0.5">
+          </div>
+          <div class="form-group">
+            <label class="form-label">单课时单价 (元)</label>
+            <input class="form-input" type="number" id="hl_price" value="${log.unitPrice}">
+          </div>
+          <div class="form-group">
+            <label class="form-label">日期</label>
+            <input class="form-input" type="date" id="hl_date" value="${dateStr}">
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">授课教师 <span class="hint">更换教师会从新教师的分配课时中扣减</span></label>
+          <select class="form-select" id="hl_teacher">${teacherOpts}</select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">备注</label>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">
+            ${NOTE_TAGS.map(tag=>`<button type="button" class="btn btn-secondary btn-sm" style="padding:2px 10px;font-size:12px" onclick="App.appendNote('hl_note','${tag}')">${tag}</button>`).join('')}
+          </div>
+          <input class="form-input" id="hl_note" value="${(log.note||'').replace(/"/g,'&quot;')}">
+        </div>
+        <div class="form-hint">保存后自动重新计算各教师的剩余课时，原记录的课时会先退回再重新扣减。</div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-close-modal>取消</button>
+        <button class="btn btn-primary" onclick="App.saveHourLogEdit('${id}')">保存修改</button>
+      </div>
+    `);
+  },
+
+  saveHourLogEdit(id) {
+    const d = DB.get();
+    const log = d.hourLogs.find(x=>x.id===id);
+    if (!log) return;
+    const s = d.students.find(x=>x.id===log.studentId);
+    if (!s) { toast('原学生已被删除', 'error'); return; }
+    const newHours = Number($('#hl_hours').value)||0;
+    const newPrice = Number($('#hl_price').value)||0;
+    const newDate = $('#hl_date').value;
+    const newTid = $('#hl_teacher').value;
+    const newNote = $('#hl_note').value.trim();
+    if (newHours <= 0) { toast('请填写正确的课时数', 'error'); return; }
+
+    if (!s.teacherHours) s.teacherHours = [];
+    // 1) 回退旧记录: 课时退回旧教师
+    const oldTh = s.teacherHours.find(x => x.teacherId === log.teacherId);
+    if (oldTh) oldTh.hours += log.hours;
+    else s.teacherHours.push({ teacherId: log.teacherId, hours: log.hours });
+    // 2) 校验新教师余量并扣减 (新教师==旧教师时, 回退后再扣, 等效于差额调整)
+    const newTh = s.teacherHours.find(x => x.teacherId === newTid);
+    const newAvail = newTh ? newTh.hours : (s.remainHours||0) + log.hours;
+    if (newAvail < newHours) {
+      // 余额不足: 回滚 restore, 保持原状
+      const backTh = s.teacherHours.find(x => x.teacherId === log.teacherId);
+      if (backTh) backTh.hours -= log.hours;
+      s.remainHours = (s.teacherHours||[]).reduce((sum,x)=>sum+(x.hours||0), 0);
+      toast(`该教师剩余课时不足 (仅剩 ${newAvail})`, 'error');
+      return;
+    }
+    if (newTh) newTh.hours -= newHours;
+    else s.teacherHours.push({ teacherId: newTid, hours: (s.remainHours||0) - newHours });
+    // 3) 更新记录
+    log.hours = newHours;
+    log.unitPrice = newPrice;
+    log.date = new Date(newDate).toISOString();
+    log.teacherId = newTid;
+    log.note = newNote;
+    log.remainAfter = (s.teacherHours.find(x=>x.teacherId===newTid)?.hours) ?? 0;
+    // 4) 汇总
+    s.remainHours = (s.teacherHours || []).reduce((sum, x) => sum + (x.hours||0), 0);
+    const tName = d.teachers.find(x=>x.id===newTid)?.name || '';
+    this.addLog(`修改消课记录: ${s.name} · ${tName} · ${newHours}课时${newNote?' · '+newNote:''}`);
+    DB.persist();
+    this.closeModal();
+    toast('消课记录已修改, 剩余课时已重算');
     this.render();
   },
 
@@ -3362,6 +3693,7 @@ const App = {
       date: new Date(date).toISOString(),
       note,
     });
+    this.addLog('登记缴费: ' + amount + '元');
     DB.persist();
     this.closeModal();
     toast('缴费已登记');
@@ -3372,6 +3704,7 @@ const App = {
     if (!confirm('确认删除该缴费记录？')) return;
     const d = DB.get();
     d.payments = d.payments.filter(x=>x.id!==id);
+    this.addLog('删除缴费记录');
     DB.persist();
     toast('已删除');
     this.render();
@@ -3431,6 +3764,22 @@ const App = {
           💡 例如暑假班设为 2026-07-01 至 2026-08-31，则只在这段时间内标记工作日出勤，周末和范围外的日期不参与考勤。
         </div>
         <button class="btn btn-primary" onclick="App.saveSettings()">保存日期范围</button>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title"><span class="title-icon" style="background:#0ea5e9"></span>📜 操作日志</div>
+        </div>
+        <div class="highlight-box">
+          所有增删改操作（学生/教师/缴费/消课/工资/考勤/设置）都会记录<strong>时间、设备、来源和内容</strong>，最多保留 500 条，可在「操作日志」页面查看和导出。
+        </div>
+        <div class="form-group">
+          <label class="form-label">本机设备名称 <span class="hint">仅本设备生效，日志中显示，便于区分哪台手机/电脑</span></label>
+          <div style="display:flex;gap:8px">
+            <input class="form-input" id="set_device_name" value="${this.getDeviceName()}" placeholder="如：前台电脑 / 校长手机" style="flex:1">
+            <button class="btn btn-primary" onclick="App.saveDeviceName()">保存</button>
+          </div>
+        </div>
       </div>
 
       <div class="card">
@@ -3535,6 +3884,15 @@ const App = {
     `;
   },
 
+  saveDeviceName() {
+    const name = $('#set_device_name').value.trim() || this.getDeviceName();
+    localStorage.setItem('bozhi_device_name', name);
+    this.addLog('修改本机设备名称: ' + name);
+    DB.persist();  // 让日志随同步分发
+    toast('设备名称已保存');
+    this.render();
+  },
+
   saveSettings() {
     const d = DB.get();
     d.settings.orgName = $('#set_orgname').value.trim() || '博智托管';
@@ -3543,6 +3901,7 @@ const App = {
     d.settings.eveningDateEnd = $('#set_evening_end')?.value || '';
     d.settings.summerDateStart = $('#set_summer_start')?.value || '';
     d.settings.summerDateEnd = $('#set_summer_end')?.value || '';
+    this.addLog('修改系统设置');
     DB.persist();
     toast('设置已保存');
     this.render();
@@ -3642,6 +4001,7 @@ ON CONFLICT (id) DO NOTHING;`;
   },
 
   exportData() {
+    this.addLog('导出 JSON 备份');
     const data = JSON.stringify(DB.get(), null, 2);
     const blob = new Blob([data], {type:'application/json'});
     const a = document.createElement('a');
@@ -3885,7 +4245,10 @@ ON CONFLICT (id) DO NOTHING;`;
         <div class="highlight-box" id="cf_preview">填写后将显示剩余课时</div>
         <div class="form-group">
           <label class="form-label">备注</label>
-          <input class="form-input" id="cf_note" placeholder="可选">
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">
+            ${NOTE_TAGS.map(tag=>`<button type="button" class="btn btn-secondary btn-sm" style="padding:2px 10px;font-size:12px" onclick="App.appendNote('cf_note','${tag}')">${tag}</button>`).join('')}
+          </div>
+          <input class="form-input" id="cf_note" placeholder="可选，点击上方标签快速填写">
         </div>
       </div>
       <div class="modal-footer">
@@ -3944,6 +4307,8 @@ ON CONFLICT (id) DO NOTHING;`;
     };
     d.hourLogs.push(log);
     DB.persist();
+    const tName = d.teachers.find(x=>x.id===tid)?.name || '';
+    this.addLog(`教师端消课: ${tName} 记录 ${s.name} · ${hours}课时${note?' · '+note:''}`);
     this.closeModal();
     toast(`已记录 ${s.name} 消课 ${hours} 课时`);
     this.render();
@@ -3955,6 +4320,70 @@ ON CONFLICT (id) DO NOTHING;`;
    *    - 晚辅导/寒暑期班: 只有学生的年级固定老师可以标记缺勤 (仅工作日)
    *    - 周末托: 所有老师都可以标记出勤 (仅休息日)
    * ================================================================== */
+  /* 教师分享端: 我的工资 (只读, 只能看自己) */
+  viewShareSalary() {
+    const t = DB.get().teachers.find(x=>x.id===this.shareTeacherId);
+    if (!t) {
+      return `<div class="empty-state"><div class="empty-state-icon">🔒</div><div class="empty-state-text">链接已失效</div>
+        <button class="btn btn-primary" onclick="location.hash=''">返回工作台</button></div>`;
+    }
+    const month = this.state.currentMonth;
+    const locked = this.isMonthLocked(month);
+    const sal = this.calcTeacherSalary(t, month);
+    const isHourly = t.jobType === 'hourly';
+
+    // 月度切换器
+    const nav = `
+      <div class="card-header">
+        <div class="card-title"><span class="title-icon" style="background:#34a853"></span>我的工资</div>
+        <div class="month-selector">
+          <button class="month-nav-btn" onclick="App.state.currentMonth=monthNav(App.state.currentMonth,-1); App.render()">‹</button>
+          <input type="month" value="${month}" onchange="App.state.currentMonth=this.value; App.render()">
+          <button class="month-nav-btn" onclick="App.state.currentMonth=monthNav(App.state.currentMonth,1); App.render()">›</button>
+        </div>
+      </div>`;
+
+    if (sal.inactive) {
+      return `<div class="card">${nav}
+        <div class="empty-state"><div class="empty-state-icon">⏸️</div>
+        <div class="empty-state-text">${month} 您当月${sal.inactiveLabel}，不核算工资</div></div></div>`;
+    }
+
+    const item = (label, val, sub='') => `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 4px;border-bottom:1px solid #f1f5f9">
+        <div><div style="font-size:13px">${label}</div>${sub?`<div style="font-size:11px;color:var(--text-light)">${sub}</div>`:''}</div>
+        <div style="font-weight:600;color:${val>0?'var(--primary)':'var(--text-light)'}">${fmtMoney(val)}</div>
+      </div>`;
+
+    return `
+      <div class="card">
+        ${nav}
+        ${locked
+          ? `<div class="highlight-box" style="background:#f0fdf4;border-color:#86efac">✅ ${month} 工资已由机构确认发薪，以下金额为最终核算结果</div>`
+          : `<div class="highlight-box">⏳ ${month} 工资为预估值，机构确认发薪后会锁定金额</div>`}
+        <div class="salary-section">
+          <div class="salary-section-title">💰 本月工资构成</div>
+          ${isHourly
+            ? item('时薪工资', sal.hourlySalary, `${fmtMoney(sal.hourlyRate)}/h × ${sal.actualHours}小时 (${sal.actualDays}天)`)
+            : item('基本工资', sal.baseSalary) + item('绩效工资', sal.perfSalary, `${sal.perfBase} × ${sal.perfScore}%`)}
+          ${!isHourly && (t.jobType||'full')==='full' ? item('全勤奖', sal.fullAttendBonus) : ''}
+          ${sal.perfAllowance>0 ? item('绩效津贴', sal.perfAllowance) : ''}
+          ${item('小课课时费', sal.courseFee)}
+          ${item('岗位补助', sal.postBonus)}
+          ${item('交通补贴', sal.transportBonus)}
+          ${sal.socialType==='pay'
+            ? item('社保扣除', -sal.socialDeduction, '个人缴纳部分')
+            : (sal.socialSubsidy>0 ? item('社保补贴', sal.socialSubsidy) : '')}
+          ${sal.leaveDeduction>0 ? item('请假扣除', -sal.leaveDeduction, `缺勤 ${sal.absentCount} 天`) : ''}
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 4px;background:var(--primary-light);border-radius:8px;margin-top:12px">
+          <div style="font-weight:700">实发工资</div>
+          <div style="font-weight:800;font-size:22px;color:var(--primary)">${fmtMoney(sal.total)}</div>
+        </div>
+      </div>
+    `;
+  },
+
   viewShareAttendance() {
     const d = DB.get();
     const t = d.teachers.find(x=>x.id===this.shareTeacherId);
@@ -4217,6 +4646,7 @@ ON CONFLICT (id) DO NOTHING;`;
   },
 
   saveShareStudentAbsent(studentId, attType) {
+    if (!this.guardMonth(this.state.currentMonth)) return;
     const d = DB.get();
     const s = d.students.find(x=>x.id===studentId);
     if (!s) return;
@@ -4235,6 +4665,7 @@ ON CONFLICT (id) DO NOTHING;`;
       }
     });
     s.attendanceRecords[month][attType] = records;
+    this.addLog('保存学生考勤: ' + s.name);
     DB.persist();
     this.closeModal();
     toast(`已保存 ${s.name} 的考勤记录`);
@@ -4316,6 +4747,7 @@ ON CONFLICT (id) DO NOTHING;`;
       code,
       createdAt: new Date().toISOString(),
     });
+    this.addLog('生成消课分享链接');
     DB.persist();
     toast('链接已生成');
     this.openShareManager(teacherId);
@@ -4326,6 +4758,7 @@ ON CONFLICT (id) DO NOTHING;`;
     const d = DB.get();
     const sh = d.teacherShares.find(x=>x.id===shareId);
     if (sh) sh.revokedAt = new Date().toISOString();
+    this.addLog('撤销消课分享链接');
     DB.persist();
     toast('已作废');
     this.openShareManager(sh.teacherId);
@@ -4336,6 +4769,7 @@ ON CONFLICT (id) DO NOTHING;`;
    * ================================================================== */
   exportExcel(type) {
     if (typeof XLSX === 'undefined') { toast('Excel库加载失败', 'error'); return; }
+    this.addLog('导出Excel: ' + type);
     const d = DB.get();
     const wb = XLSX.utils.book_new();
     const ws2a = (data, name) => {
