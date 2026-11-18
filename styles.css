@@ -1202,3 +1202,19 @@ tbody tr:last-child td {
     font-size: 9px;
   }
 }
+
+/* 表头内嵌筛选下拉 */
+.th-filter {
+  display: block;
+  width: 100%;
+  max-width: 110px;
+  margin-top: 4px;
+  padding: 2px 4px;
+  font-size: 11px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 4px;
+  background: #fff;
+  color: var(--text, #374151);
+  font-weight: 400;
+}
+.th-filter:focus { outline: none; border-color: var(--primary, #4f6ef7); }

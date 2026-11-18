@@ -711,15 +711,7 @@ const App = {
             <input type="text" placeholder="搜索姓名 / 电话 / 学校" value="${this.state.search}"
               oninput="App.state.search=this.value; App.renderStudentsList()">
           </div>
-          <select class="filter-select" onchange="App.state.filterType=this.value; App.render()">
-            <option value="">全部类型</option>
-            ${ENROLL_TYPES.map(t => `<option value="${t.key}" ${this.state.filterType===t.key?'selected':''}>${t.label}</option>`).join('')}
-          </select>
-          <select class="filter-select" onchange="App.state.filterGrade=this.value; App.render()">
-            <option value="">全部年级</option>
-            ${GRADES.map(g => `<option value="${g}" ${this.state.filterGrade===g?'selected':''}>${g}</option>`).join('')}
-          </select>
-          <div style="margin-left:auto;font-size:12px;color:var(--text-light)">共 ${list.length} 名</div>
+          <div style="margin-left:auto;font-size:12px;color:var(--text-light)">共 ${list.length} 名 · 点击表头筛选</div>
         </div>
         <div id="studentList">${this.renderStudentTable(list)}</div>
       </div>
@@ -760,8 +752,18 @@ const App = {
           <thead>
             <tr>
               <th>姓名</th>
-              <th>年级</th>
-              <th>报名类型</th>
+              <th>年级
+                <select class="th-filter" onchange="App.state.filterGrade=this.value; App.render()">
+                  <option value="">全部</option>
+                  ${GRADES.map(g=>`<option value="${g}" ${this.state.filterGrade===g?'selected':''}>${g}</option>`).join('')}
+                </select>
+              </th>
+              <th>报名类型
+                <select class="th-filter" onchange="App.state.filterType=this.value; App.render()">
+                  <option value="">全部</option>
+                  ${ENROLL_TYPES.map(t=>`<option value="${t.key}" ${this.state.filterType===t.key?'selected':''}>${t.label}</option>`).join('')}
+                </select>
+              </th>
               <th>任课教师</th>
               <th>剩余课时</th>
               <th>电话</th>
@@ -1366,6 +1368,8 @@ const App = {
     const d = DB.get();
     let list = d.teachers;
     if (this.state.filterDept) list = list.filter(t=>t.dept===this.state.filterDept);
+    if (this.state.filterJobType) list = list.filter(t => (t.jobType||'full')===this.state.filterJobType);
+    if (this.state.filterStatus) list = list.filter(t => (t.status==='disabled'?'disabled':'active')===this.state.filterStatus);
     // 搜索 + 排序: 在职在前、全职前置、初中部前置, 已离职排最后
     list = list.filter(t => !this.state.search || t.name.includes(this.state.search) || (t.subject||'').includes(this.state.search));
     const rank = (t) => {
@@ -1388,27 +1392,52 @@ const App = {
             <input type="text" placeholder="搜索姓名 / 科目" value="${this.state.search||''}"
               oninput="App.state.search=this.value">
           </div>
-          <select class="filter-select" onchange="App.state.filterDept=this.value; App.render()">
-            <option value="">全部部门</option>
-            ${DEPTS.map(d=>`<option value="${d}" ${this.state.filterDept===d?'selected':''}>${d}</option>`).join('')}
-          </select>
-          <div style="margin-left:auto;font-size:12px;color:var(--text-light)">在职 ${list.length - list.filter(t=>t.status==='disabled').length} 名${disabledCount?` · 已离职 ${disabledCount} 名`:''}</div>
+          <div style="margin-left:auto;font-size:12px;color:var(--text-light)">在职 ${list.length - list.filter(t=>t.status==='disabled').length} 名${disabledCount?` · 已离职 ${disabledCount} 名`:''} · 点击表头筛选</div>
         </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>姓名</th><th>部门</th><th>类型</th><th>职级</th><th>科目</th><th>分成比例</th><th>本月工资</th><th>操作</th></tr></thead>
+            <thead><tr>
+              <th>姓名</th>
+              <th>部门
+                <select class="th-filter" onchange="App.state.filterDept=this.value; App.render()">
+                  <option value="">全部</option>
+                  ${DEPTS.map(dp=>`<option value="${dp}" ${this.state.filterDept===dp?'selected':''}>${dp}</option>`).join('')}
+                </select>
+              </th>
+              <th>类型
+                <select class="th-filter" onchange="App.state.filterJobType=this.value; App.render()">
+                  <option value="">全部</option>
+                  <option value="full" ${this.state.filterJobType==='full'?'selected':''}>全职</option>
+                  <option value="hourly" ${this.state.filterJobType==='hourly'?'selected':''}>时薪</option>
+                  <option value="part" ${this.state.filterJobType==='part'?'selected':''}>兼职</option>
+                </select>
+              </th>
+              <th>职级</th>
+              <th>科目</th>
+              <th>分成比例</th>
+              <th>本月工资</th>
+              <th>状态
+                <select class="th-filter" onchange="App.state.filterStatus=this.value; App.render()">
+                  <option value="">全部</option>
+                  <option value="active" ${this.state.filterStatus==='active'?'selected':''}>在职</option>
+                  <option value="disabled" ${this.state.filterStatus==='disabled'?'selected':''}>已离职</option>
+                </select>
+              </th>
+              <th>操作</th>
+            </tr></thead>
             <tbody>
               ${list.length ? list.map(t => {
                 const sal = this.calcTeacherSalary(t, this.state.currentMonth);
                 const isDisabled = t.status === 'disabled';
-                return `<tr ${isDisabled?'style="opacity:0.55"':''}>
-                  <td><strong>${t.name}</strong>${t.isAdmin?'<span class="tag tag-orange">管理岗</span>':''}${isDisabled?'<span class="tag tag-gray">已离职</span>':''}</td>
+                return `                <tr ${isDisabled?'style="opacity:0.55"':''}>
+                  <td><strong>${t.name}</strong>${t.isAdmin?'<span class="tag tag-orange">管理岗</span>':''}</td>
                   <td>${t.dept||'-'}</td>
                   <td>${(t.jobType||'full')==='full'?'<span class="tag tag-green">全职</span>':(t.jobType==='hourly'?'<span class="tag tag-cyan">时薪</span>':'<span class="tag tag-gray">兼职</span>')}</td>
                   <td>${t.level||'-'}</td>
                   <td>${t.subject||'-'}</td>
                   <td>${t.shareRate||DB.get().settings.defaultShareRate}%</td>
                   <td>${sal.inactive ? `<span style="color:var(--text-light)">— ${sal.inactiveLabel}</span>` : `<strong style="color:var(--primary)">${fmtMoney(sal.total)}</strong>`}</td>
+                  <td>${isDisabled?'<span class="tag tag-gray">已离职</span>':'<span class="tag tag-green">在职</span>'}</td>
                   <td class="action-cell">
                     <button class="btn btn-ghost btn-sm" onclick="App.openTeacherDetail('${t.id}')">详情</button>
                     <button class="btn btn-ghost btn-sm" onclick="App.openTeacherForm('${t.id}')">编辑</button>
@@ -1419,7 +1448,7 @@ const App = {
                     <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="App.delTeacher('${t.id}')">删除</button>
                   </td>
                 </tr>`;
-              }).join('') : `<tr><td colspan="8" class="table-empty">暂无教师</td></tr>`}
+              }).join('') : `<tr><td colspan="9" class="table-empty">暂无教师</td></tr>`}
             </tbody>
           </table>
         </div>
@@ -2016,7 +2045,7 @@ const App = {
           </div>
           <div class="form-group">
             <label class="form-label">绩效得分 (0-100%)</label>
-            <input class="form-input" type="number" id="se_perf" value="${rec.perfScore ?? 80}" step="0.1" min="0" max="100">
+            <input class="form-input" type="number" id="se_perf" value="${rec.perfScore ?? 0}" step="0.1" min="0" max="100">
             <div class="form-hint">如 80 表示 80%, 绩效工资 = 绩效基数 × 得分%</div>
           </div>
         </div>
@@ -2271,7 +2300,7 @@ const App = {
     }
 
     // ===== 全职/兼职: 原有逻辑 =====
-    const perfScore = rec.perfScore ?? 80;
+    const perfScore = rec.perfScore ?? 0;
     const perfSalary = Math.round(perfBase * perfScore / 100 * 100) / 100;
 
     // 请假扣除工资 = 基本工资 / 应出勤天数 × 请假天数
@@ -3048,7 +3077,7 @@ const App = {
                   const s = d.students.find(x=>x.id===l.studentId);
                   const t = d.teachers.find(x=>x.id===l.teacherId);
                   return `<tr>
-                    <td>${fmtDate(l.date)}${l.createdAt?`<br><span style="font-size:10px;color:var(--text-light)">记于 ${fmtDate(l.createdAt)}</span>`:''}</td>
+                    <td>${fmtDate(l.date)}${l.createdAt?`<br><span style="font-size:10px;color:var(--text-light)">记于 ${fmtDate(l.createdAt)}${(l.edits&&l.edits.length)?` · <span style="color:var(--warning,#d97706)">已改${l.edits.length}次(末次改于 ${fmtDate(l.edits[l.edits.length-1].ts)})</span>`:''}</span>`:''}</td>
                     <td>${s?s.name:'已删除'}</td>
                     <td>${t?t.name:'-'}</td>
                     <td><strong style="color:var(--danger)">-${l.hours}</strong></td>
@@ -4210,15 +4239,18 @@ ON CONFLICT (id) DO NOTHING;`;
         ${myLogs.length ? `
           <div class="table-wrap">
             <table>
-              <thead><tr><th>日期</th><th>学生</th><th>消耗</th><th>剩余</th></tr></thead>
+              <thead><tr><th>上课时间</th><th>学生</th><th>消耗</th><th>剩余</th><th>操作</th></tr></thead>
               <tbody>
                 ${myLogs.slice().reverse().map(l => {
                   const s = d.students.find(x=>x.id===l.studentId);
+                  const logMonth = new Date(l.date).toISOString().slice(0,7);
+                  const canEdit = !this.isMonthLocked(logMonth);
                   return `<tr>
-                    <td>${fmtDate(l.date)}</td>
+                    <td>${fmtDate(l.date)}${(l.edits&&l.edits.length)?'<span class="tag tag-orange" style="font-size:10px;margin-left:4px">已改</span>':''}${l.createdAt?`<br><span style="font-size:10px;color:var(--text-light)">记于 ${fmtDate(l.createdAt)}</span>`:''}</td>
                     <td>${s?s.name:'-'}</td>
                     <td><strong style="color:var(--danger)">-${l.hours}</strong></td>
                     <td>${l.remainAfter}</td>
+                    <td>${canEdit?`<button class="btn btn-ghost btn-sm" onclick="App.shareEditHourLogDate('${l.id}')">改时间</button>`:'<span style="font-size:11px;color:var(--text-light)">已锁定</span>'}</td>
                   </tr>`;
                 }).join('')}
               </tbody>
@@ -4477,6 +4509,59 @@ ON CONFLICT (id) DO NOTHING;`;
     this.addLog(`撤销 ${month} 月工资确认`);
     DB.persist();
     toast('已撤销确认');
+    this.render();
+  },
+
+  /* 教师端: 修改自己消课记录的上课时间 (保留首次操作时间, 记录修改历史) */
+  shareEditHourLogDate(id) {
+    const d = DB.get();
+    const log = d.hourLogs.find(x=>x.id===id);
+    if (!log || log.teacherId !== this.shareTeacherId) return;
+    const logMonth = new Date(log.date).toISOString().slice(0,7);
+    if (this.isMonthLocked(logMonth)) { toast('该记录所属月份已确认发薪并锁定，请联系机构修改', 'warning'); return; }
+    const s = d.students.find(x=>x.id===log.studentId);
+    const dateStr = new Date(log.date).toISOString().slice(0,10);
+    this.openModal(`
+      <div class="modal-header">
+        <div class="modal-title">修改上课时间 · ${s?s.name:''}</div>
+        <button class="modal-close" data-close-modal>×</button>
+      </div>
+      <div class="modal-body">
+        <div class="highlight-box" style="font-size:12px">
+          该记录上课时间: <strong>${fmtDate(log.date)}</strong> · 首次记录于 ${log.createdAt?fmtDate(log.createdAt):'-'}${(log.edits&&log.edits.length)?`<br>已修改 ${log.edits.length} 次: ${log.edits.map(e=>new Date(e.ts).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})+' 改为 '+e.date.slice(5)).join('；')}`:''}
+        </div>
+        <div class="form-group">
+          <label class="form-label">新的上课时间</label>
+          <input class="form-input" type="date" id="she_date" value="${dateStr}">
+          <div class="form-hint">仅可修改上课时间，课时数等请联系机构修改。系统会保留你的首次操作时间和每次修改记录。</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-close-modal>取消</button>
+        <button class="btn btn-primary" onclick="App.saveShareHourLogDate('${id}')">保存</button>
+      </div>
+    `);
+  },
+
+  saveShareHourLogDate(id) {
+    const d = DB.get();
+    const log = d.hourLogs.find(x=>x.id===id);
+    if (!log || log.teacherId !== this.shareTeacherId) return;
+    const logMonth = new Date(log.date).toISOString().slice(0,7);
+    if (this.isMonthLocked(logMonth)) { toast('该记录所属月份已锁定，请联系机构修改', 'warning'); return; }
+    const newDate = $('#she_date').value;
+    if (!newDate) { toast('请选择日期', 'error'); return; }
+    const oldDateStr = new Date(log.date).toISOString().slice(0,10);
+    if (newDate === oldDateStr) { this.closeModal(); return; }
+    // 记录修改历史 (首次操作时间 createdAt 不变)
+    if (!log.edits) log.edits = [];
+    log.edits.push({ ts: new Date().toISOString(), date: oldDateStr });
+    log.date = new Date(newDate).toISOString();
+    const s = d.students.find(x=>x.id===log.studentId);
+    this.addLog(`教师修改上课时间: ${s?s.name:'?'} → ${newDate}`);
+    DB.persist();
+    this.closeModal();
+    toast('上课时间已修改');
     this.render();
   },
 
