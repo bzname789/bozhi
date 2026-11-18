@@ -1277,3 +1277,20 @@ tbody tr:last-child td {
 .dash-nav-btn.sys  .dnb-icon { background: #f5edff; }
 .dnb-label { font-size: 14px; font-weight: 700; color: var(--text, #1f2937); }
 .dnb-desc  { font-size: 11px; color: var(--text-light, #9ca3af); }
+
+/* 回到主页栏 */
+.back-home-bar {
+  display: flex; align-items: center; gap: 12px;
+  margin-bottom: 14px;
+}
+.back-home-title { font-size: 15px; font-weight: 700; color: var(--text, #1f2937); }
+
+/* 首页: 新增类实心按钮 */
+.dash-nav-btn.dnb-solid {
+  background: linear-gradient(135deg, #4f6ef7 0%, #6d5df6 100%);
+  border-color: transparent;
+}
+.dash-nav-btn.dnb-solid .dnb-label { color: #fff; }
+.dash-nav-btn.dnb-solid .dnb-desc { color: rgba(255,255,255,.8); }
+.dash-nav-btn.dnb-solid .dnb-icon { background: rgba(255,255,255,.18); }
+.dash-nav-btn.dnb-solid:hover { box-shadow: 0 8px 20px rgba(79,110,247,.35); }

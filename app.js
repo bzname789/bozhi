@@ -586,6 +586,15 @@ const App = {
       case 'settings':  content = this.viewSettings(); break;
       default: content = this.viewDashboard();
     }
+    // 非 dashboard 页统一在顶部加"回到主页"栏
+    if (this.view !== 'dashboard') {
+      const NAV_TITLES = { students:'学生管理', teachers:'教师管理', attendance:'考勤管理', hours:'课时消耗', salary:'工资结算', finance:'收支总览', logs:'操作日志', settings:'系统设置' };
+      content = `
+        <div class="back-home-bar">
+          <button class="btn btn-secondary btn-sm" onclick="App.view='dashboard'; App.render()">🏠 回到主页</button>
+          <span class="back-home-title">${NAV_TITLES[this.view]||''}</span>
+        </div>` + content;
+    }
     return `<div class="${mainClass}">${content}</div>`;
   },
 
@@ -608,8 +617,8 @@ const App = {
       { label: '日常管理', theme: 'main', items: [
         { icon:'👥', label:'学生管理', desc:'档案·缴费·课时', nav:'students' },
         { icon:'🧑‍🏫', label:'教师管理', desc:`${activeTeachers} 位在职`, nav:'teachers' },
-        { icon:'➕', label:'新增学生', desc:'快速录入', act:'App.openStudentForm()' },
-        { icon:'➕', label:'新增教师', desc:'快速录入', act:'App.openTeacherForm()' },
+        { icon:'📝', label:'新增学生', desc:'录入新学生', act:'App.openStudentForm()', solid:true },
+        { icon:'🆕', label:'新增教师', desc:'录入新教师', act:'App.openTeacherForm()', solid:true },
       ]},
       { label: '教学业务', theme: 'biz', items: [
         { icon:'📅', label:'考勤管理', desc:'出勤·缺勤标记', nav:'attendance' },
@@ -635,18 +644,15 @@ const App = {
         <div class="dash-group">
           <div class="dash-group-title"><span class="dash-dot ${group.theme}"></span>${group.label}</div>
           <div class="dash-grid">
-            ${group.items.map(it => it.nav
-              ? `<button class="dash-nav-btn ${group.theme}" data-nav="${it.nav}">
+            ${group.items.map(it => {
+              const cls = `dash-nav-btn ${group.theme}${it.solid?' dnb-solid':''}`;
+              const click = it.nav ? `data-nav="${it.nav}"` : `onclick="${it.act}"`;
+              return `<button class="${cls}" ${click}>
                    <span class="dnb-icon">${it.icon}</span>
                    <span class="dnb-label">${it.label}</span>
                    <span class="dnb-desc">${it.desc}</span>
-                 </button>`
-              : `<button class="dash-nav-btn ${group.theme}" onclick="${it.act}">
-                   <span class="dnb-icon">${it.icon}</span>
-                   <span class="dnb-label">${it.label}</span>
-                   <span class="dnb-desc">${it.desc}</span>
-                 </button>`
-            ).join('')}
+                 </button>`;
+            }).join('')}
           </div>
         </div>
       `).join('')}
