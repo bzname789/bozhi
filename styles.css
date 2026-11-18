@@ -1237,9 +1237,9 @@ tbody tr:last-child td {
   margin-bottom: 12px;
 }
 .dash-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-.dash-dot.main { background: #4f6ef7; }
-.dash-dot.biz  { background: #34a853; }
-.dash-dot.sys  { background: #9333ea; }
+.dash-dot.gmain { background: #4f6ef7; }
+.dash-dot.gbiz  { background: #34a853; }
+.dash-dot.gsys  { background: #9333ea; }
 
 .dash-grid {
   display: grid;
@@ -1263,17 +1263,17 @@ tbody tr:last-child td {
   border-color: transparent;
   box-shadow: 0 8px 20px rgba(17,24,39,.10);
 }
-.dash-nav-btn.main:hover { box-shadow: 0 8px 20px rgba(79,110,247,.22); }
-.dash-nav-btn.biz:hover  { box-shadow: 0 8px 20px rgba(52,168,83,.22); }
-.dash-nav-btn.sys:hover  { box-shadow: 0 8px 20px rgba(147,51,234,.22); }
+.dash-nav-btn.gmain:hover { box-shadow: 0 8px 20px rgba(79,110,247,.22); }
+.dash-nav-btn.gbiz:hover  { box-shadow: 0 8px 20px rgba(52,168,83,.22); }
+.dash-nav-btn.gsys:hover  { box-shadow: 0 8px 20px rgba(147,51,234,.22); }
 .dnb-icon {
   width: 40px; height: 40px; border-radius: 11px;
   display: flex; align-items: center; justify-content: center;
   font-size: 20px; margin-bottom: 8px;
 }
-.dash-nav-btn.main .dnb-icon { background: #eef1ff; }
-.dash-nav-btn.biz  .dnb-icon { background: #eaf7ef; }
-.dash-nav-btn.sys  .dnb-icon { background: #f5edff; }
+.dash-nav-btn.gmain .dnb-icon { background: #eef1ff; }
+.dash-nav-btn.gbiz  .dnb-icon { background: #eaf7ef; }
+.dash-nav-btn.gsys  .dnb-icon { background: #f5edff; }
 .dnb-label { font-size: 14px; font-weight: 700; color: var(--text, #1f2937); }
 .dnb-desc  { font-size: 11px; color: var(--text-light, #9ca3af); }
 
@@ -1284,12 +1284,3 @@ tbody tr:last-child td {
 }
 .back-home-title { font-size: 15px; font-weight: 700; color: var(--text, #1f2937); }
 
-/* 首页: 新增类实心按钮 */
-.dash-nav-btn.dnb-solid {
-  background: linear-gradient(135deg, #4f6ef7 0%, #6d5df6 100%);
-  border-color: transparent;
-}
-.dash-nav-btn.dnb-solid .dnb-label { color: #fff; }
-.dash-nav-btn.dnb-solid .dnb-desc { color: rgba(255,255,255,.8); }
-.dash-nav-btn.dnb-solid .dnb-icon { background: rgba(255,255,255,.18); }
-.dash-nav-btn.dnb-solid:hover { box-shadow: 0 8px 20px rgba(79,110,247,.35); }

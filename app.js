@@ -620,19 +620,19 @@ const App = {
     const activeTeachers = d.teachers.filter(t => t.status !== 'disabled').length;
 
     const groups = [
-      { label: '日常管理', theme: 'main', items: [
+      { label: '日常管理', theme: 'gmain', items: [
         { icon:'👥', label:'学生管理', desc:'档案·缴费·课时', nav:'students' },
         { icon:'🧑‍🏫', label:'教师管理', desc:`${activeTeachers} 位在职`, nav:'teachers' },
-        { icon:'📝', label:'新增学生', desc:'录入新学生', act:'App.openStudentForm()', solid:true },
-        { icon:'🆕', label:'新增教师', desc:'录入新教师', act:'App.openTeacherForm()', solid:true },
+        { icon:'📝', label:'新增学生', desc:'录入新学生', act:'App.openStudentForm()' },
+        { icon:'🆕', label:'新增教师', desc:'录入新教师', act:'App.openTeacherForm()' },
       ]},
-      { label: '教学业务', theme: 'biz', items: [
+      { label: '教学业务', theme: 'gbiz', items: [
         { icon:'📅', label:'考勤管理', desc:'出勤·缺勤标记', nav:'attendance' },
         { icon:'⏱️', label:'课时消耗', desc:'小课消课记录', nav:'hours' },
         { icon:'💸', label:'工资结算', desc:'核算·确认·锁定', nav:'salary' },
         { icon:'📊', label:'收支总览', desc:'收入·支出·结余', nav:'finance' },
       ]},
-      { label: '系统工具', theme: 'sys', items: [
+      { label: '系统工具', theme: 'gsys', items: [
         { icon:'⚡', label:'快速消课', desc:'一键记课时', nav:'hours' },
         { icon:'📜', label:'操作日志', desc:'谁在何时做了什么', nav:'logs' },
         { icon:'⚙️', label:'系统设置', desc:'参数·云端·设备名', nav:'settings' },
@@ -3070,7 +3070,22 @@ const App = {
     const d = DB.get();
     const privateStudents = d.students.filter(s => (s.enrollTypes||[]).includes('private'));
     const month = this.state.currentMonth;
-    const monthLogs = d.hourLogs.filter(l => l.date.startsWith(month));
+    const allMonthLogs = d.hourLogs.filter(l => l.date.startsWith(month));
+    // 消课明细表头筛选 (学生/教师)
+    const ft = this.state.hoursFilterTeacher || '';
+    const fs = this.state.hoursFilterStudent || '';
+    let monthLogs = allMonthLogs;
+    if (ft) monthLogs = monthLogs.filter(l => l.teacherId === ft);
+    if (fs) monthLogs = monthLogs.filter(l => l.studentId === fs);
+    const studentOpts = [...new Set(allMonthLogs.map(l => l.studentId))]
+      .map(id => d.students.find(x=>x.id===id)).filter(Boolean);
+    const teacherOpts = [...new Set(allMonthLogs.map(l => l.teacherId))]
+      .map(id => d.teachers.find(x=>x.id===id)).filter(Boolean);
+    const monthHoursSum = monthLogs.reduce((s,l)=>s+l.hours, 0);
+    const monthFeeSum = monthLogs.reduce((s,l)=>{
+      const t = d.teachers.find(x=>x.id===l.teacherId);
+      return s + l.hours*(l.unitPrice||0)*(t?(t.shareRate||d.settings.defaultShareRate):0)/100;
+    }, 0);
 
     return `
       <div class="card">
@@ -3111,11 +3126,26 @@ const App = {
           ` : `<div style="text-align:center;padding:12px;color:#5a4500">暂无小课学生，请先在学生管理中添加报名"小课"</div>`}
         </div>
 
-        <div class="card-title" style="margin:16px 0 10px"><span class="title-icon"></span>${month} 消课明细</div>
+        <div class="card-title" style="margin:16px 0 10px"><span class="title-icon"></span>${month} 消课明细 <span style="font-size:12px;color:var(--text-light);font-weight:400">共 ${monthLogs.length} 条 · 消耗 ${monthHoursSum} 课时 · 课时费 ${fmtMoney(monthFeeSum)}</span></div>
         ${monthLogs.length ? `
           <div class="table-wrap">
             <table>
-              <thead><tr><th>日期</th><th>学生</th><th>教师</th><th>消耗</th><th>单价</th><th>教师课时费</th><th>备注</th><th>剩余</th><th>操作</th></tr></thead>
+              <thead><tr>
+                <th>日期</th>
+                <th>学生
+                  <select class="th-filter" onchange="App.state.hoursFilterStudent=this.value; App.render()">
+                    <option value="">全部</option>
+                    ${studentOpts.map(s=>`<option value="${s.id}" ${fs===s.id?'selected':''}>${s.name}</option>`).join('')}
+                  </select>
+                </th>
+                <th>教师
+                  <select class="th-filter" onchange="App.state.hoursFilterTeacher=this.value; App.render()">
+                    <option value="">全部</option>
+                    ${teacherOpts.map(t=>`<option value="${t.id}" ${ft===t.id?'selected':''}>${t.name}</option>`).join('')}
+                  </select>
+                </th>
+                <th>消耗</th><th>单价</th><th>教师课时费</th><th>备注</th><th>剩余</th><th>操作</th>
+              </tr></thead>
               <tbody>
                 ${monthLogs.slice().reverse().map(l => {
                   const s = d.students.find(x=>x.id===l.studentId);
@@ -3416,7 +3446,6 @@ const App = {
           <div class="card-title"><span class="title-icon"></span>操作日志</div>
           <div style="display:flex;gap:8px">
             <button class="btn btn-secondary btn-sm" onclick="App.exportLogsCsv()">⬇️ 导出</button>
-            <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="App.clearLogs()">清空</button>
           </div>
         </div>
         <div class="toolbar">
@@ -3455,14 +3484,6 @@ const App = {
     a.click();
     this.addLog('导出操作日志');
     toast('已导出');
-  },
-
-  clearLogs() {
-    if (!confirm('确认清空全部操作日志？此操作不可恢复。')) return;
-    DB.get().logs = [];
-    DB.persist();
-    toast('日志已清空');
-    this.render();
   },
 
   // 备注快捷标签: 追加到输入框
@@ -4370,7 +4391,7 @@ ON CONFLICT (id) DO NOTHING;`;
             <input class="form-input" type="number" id="cf_hours" value="1" min="0.5" step="0.5" oninput="App.updateShareConsume()">
           </div>
           <div class="form-group">
-            <label class="form-label">日期</label>
+            <label class="form-label">上课时间 <span class="hint">默认今天, 记错了之后可改</span></label>
             <input class="form-input" type="date" id="cf_date" value="${today()}">
           </div>
         </div>
