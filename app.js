@@ -16,6 +16,7 @@ const DB = (() => {
     confirmedMonths: [], // 已确认发薪(锁定)的月份 ['2026-11', ...]
     salaryAcks: {},      // 教师工资确认反馈 { '2026-11': { teacherId: 确认时间ISO } }
     recycleBin: [],      // 回收站 [{...原档案, _deletedAt, _type}] 上限50条
+    deletedLogIds: [],   // 已被手动删除的日志id, 防止同步复活
     settings: {
       orgName: '博智托管',
       // 默认分成比例: 教师拿 60%, 托管 40%
@@ -142,7 +143,10 @@ const DB = (() => {
       const localLogs = (cache && Array.isArray(cache.logs)) ? cache.logs : [];
       const remoteLogs = Array.isArray(remote.logs) ? remote.logs : [];
       const remoteIds = new Set(remoteLogs.map(l => l.id));
-      const mergedLogs = [...localLogs.filter(l => !remoteIds.has(l.id)), ...remoteLogs]
+      // 已删除日志不参与合并 (防止其他设备旧数据复活)
+      const deletedIds = new Set((Array.isArray(remote.deletedLogIds) ? remote.deletedLogIds : [])
+        .concat(Array.isArray(cache.deletedLogIds) ? cache.deletedLogIds : []));
+      const mergedLogs = [...localLogs.filter(l => !remoteIds.has(l.id) && !deletedIds.has(l.id)), ...remoteLogs.filter(l => !deletedIds.has(l.id))]
         .sort((a,b) => (b.ts||'').localeCompare(a.ts||'')).slice(0, 500);
       cache = remote;
       cache.logs = mergedLogs;
@@ -300,9 +304,33 @@ const App = {
     });
   },
 
+  /* 一次性日志清理: 删除 2026-11-19 03:51~03:54 (北京时间) 的4条日志, 仅执行一次 */
+  cleanupLogsOnce() {
+    const KEY = 'bozhi_log_cleanup_20261119';
+    if (localStorage.getItem(KEY)) return;
+    const d = DB.get();
+    const targets = new Set(['修改工资参数 (2026-11)', '保存教师: 董津', '保存教师: 金煜晨']);
+    let removed = 0;
+    d.logs = (d.logs || []).filter(l => {
+      try {
+        const bj = new Date(l.ts).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+        if (/^2026\/11\/19 03:5[1-4]/.test(bj) && targets.has(l.action)) { removed++; return false; }
+      } catch (e) {}
+      return true;
+    });
+    localStorage.setItem(KEY, '1');
+    if (removed > 0) {
+      if (!Array.isArray(d.deletedLogIds)) d.deletedLogIds = [];
+      localStorage.setItem(KEY, 'removed:' + removed);
+      DB.persist();
+      console.log('已清理操作日志', removed, '条');
+    }
+  },
+
   async asyncInit() {
     const cfg = DB.getCloudConfig();
     if (!cfg.enabled) {
+      this.cleanupLogsOnce();
       // 未启用云端, 如果是分享链接且本地无数据, 提示
       if (location.hash.includes('share=')) {
         this.showShareError('云端同步未启用', '请联系管理员开启云端同步，否则无法跨设备使用分享链接。');
@@ -312,6 +340,7 @@ const App = {
     // 已启用云端: 先拉取最新数据
     const result = await DB.cloudPull();
     if (result.ok) {
+      this.cleanupLogsOnce();
       // 拉取成功, 如果有待验证的分享码, 现在重新查找
       if (this._shareCodePending) {
         const share = DB.get().teacherShares.find(s => s.code === this._shareCodePending && !s.revokedAt);
